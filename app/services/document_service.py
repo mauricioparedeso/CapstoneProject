@@ -26,7 +26,7 @@ ALLOWED_CONTENT_TYPES = {
 }
 
 # Directorio de almacenamiento
-STORAGE_DIR = Path("app/storage")
+STORAGE_DIR = Path("app/chroma_data")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 

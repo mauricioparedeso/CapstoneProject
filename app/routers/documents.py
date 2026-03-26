@@ -15,6 +15,11 @@ from sqlalchemy.orm import Session
 from app.models.document import get_db
 from app.services.document_service import upload_document, get_document, list_documents
 
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from app.Chroma_Imp import vector_store # Importamos el store que configuraste antes
+import shutil, os
+
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
@@ -33,6 +38,7 @@ class DocumentResponse(BaseModel):
 class UploadResponse(BaseModel):
     message: str
     document: DocumentResponse
+    indexing_status: str # Nuevo campo para confirmar ChromaDB
 
 
 class DocumentListResponse(BaseModel):
@@ -54,10 +60,47 @@ async def upload_document_endpoint(
     - Valida el formato antes de guardar
     - Retorna el ID único asignado al documento
     """
+    # 1. Guardar metadatos en SQL
     doc = await upload_document(file, db)
+    
+    await file.seek(0) 
+    # 2. PROCESAMIENTO PARA CHROMADB (E2/E3)
+    # Guardamos temporalmente para que los Loaders de LangChain puedan leerlo
+    temp_path = f"temp_{doc.original_filename}"
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    indexing_msg = "No indexado (Formato no soportado para búsqueda)"
+    
+    try:
+        # Elegir el cargador según el formato
+        if "pdf" in doc.file_format.lower():
+            loader = PyPDFLoader(temp_path)
+            pages = loader.load()
+            # Fragmentar el texto (Chunking)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            chunks = text_splitter.split_documents(pages)
+            
+            # Inyectar metadatos adicionales para el agente
+            for chunk in chunks:
+                chunk.metadata["doc_id"] = doc.id
+                chunk.metadata["source"] = doc.original_filename
+            
+            # GUARDAR EN CHROMA (Esto llena el sqlite3 y genera vectores)
+            vector_store.add_documents(chunks)
+            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos"
+            
+    except Exception as e:
+        indexing_msg = f"Error en indexación: {str(e)}"
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        
     return UploadResponse(
         message="Documento subido exitosamente.",
         document=DocumentResponse.model_validate(doc),
+        indexing_status=indexing_msg
     )
 
 
