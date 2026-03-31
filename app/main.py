@@ -2,6 +2,7 @@
 Knowledge Base Curator — API principal.
 
 Arranca con:
+    pip install -r requirements.txt
     python -m uvicorn app.main:app --reload --reload-exclude "app/chroma_data/*"
 """
 from fastapi import FastAPI
