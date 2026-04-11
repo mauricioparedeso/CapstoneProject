@@ -187,7 +187,8 @@ def get_documents():
         r = requests.get(f"{API_BASE}/documents/", timeout=10)
         if r.status_code == 200:
             return r.json().get("documents", [])
-    except Exception:
+    except Exception as e:
+        st.error(f"Error en API: {e}")
         pass
     return None
 
@@ -211,8 +212,16 @@ def chat_with_agent(message):
             json={"message": message},
             timeout=60,
         )
-        if r.status_code == 200:
-            return r.json().get("respuesta", "Sin respuesta del agente.")
+        
+        print(r.json())
+
+        data = r.json()
+
+        if "error" in data:
+            return data["error"]
+
+        return data.get("respuesta", "Sin respuesta del agente.")
+        
     except Exception as e:
         return f"Error al conectar con el agente: {e}"
     return "Error inesperado."
@@ -222,7 +231,8 @@ def check_api():
     try:
         r = requests.get(f"{API_BASE}/health", timeout=5)
         return r.status_code == 200
-    except Exception:
+    except Exception as e:
+        st.error(f"Error en API: {e}")
         return False
 
 
@@ -250,7 +260,7 @@ else:
 with st.sidebar:
     st.markdown("### Navegación")
     pagina = st.radio(
-        "",
+        "Navegación",
         ["Documentos", "Consultar Agente", "Sugerencias"],
         label_visibility="collapsed",
     )
@@ -347,17 +357,21 @@ elif pagina == "Consultar Agente":
     # Mostrar historial
     for msg in st.session_state.chat_history:
         if msg["role"] == "user":
+            contenido = msg["content"].replace("\n", "<br>")
+
             st.markdown(f"""
             <div class="chat-user">
                 <div class="chat-label user">Instructor</div>
-                {msg["content"]}
+                {contenido}
             </div>
             """, unsafe_allow_html=True)
         else:
+            contenido = msg["content"].replace("\n", "<br>")
+
             st.markdown(f"""
             <div class="chat-agent">
                 <div class="chat-label agent">Agente IA</div>
-                {msg["content"]}
+                {contenido}
             </div>
             """, unsafe_allow_html=True)
 

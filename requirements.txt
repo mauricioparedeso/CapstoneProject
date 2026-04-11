@@ -21,3 +21,5 @@ langchain-core
 langchain-groq
 pytest
 sentence-transformers
+
+streamlit

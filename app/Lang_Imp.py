@@ -1,4 +1,7 @@
-API_KEY= ""
+with open(".gitignore/API_KEY.txt", "r") as f:
+    API_KEY = f.read().strip()
+
+# git reset --soft HEAD~1
 
 """
 Correr con: python -m app.Lang_Imp
@@ -226,6 +229,14 @@ def tool_executor_node(state: State) -> State:
 
 def writer_node(state: State) -> State:
     """Genera la respuesta final iterando todas las tasks."""
+
+    tasks = state.get("tasks", [])
+    
+    if not tasks:
+        # fallback cuando no hay planner
+        response = llm.invoke([WRITER_PROMPT] + state["messages"])
+        return {"messages": [response]}
+
     resumen = "\n".join([
         f"- [{t['status'].upper()}] {t['task_name']}: {t['message'] or t['task_message']}"
         for t in state["tasks"]
