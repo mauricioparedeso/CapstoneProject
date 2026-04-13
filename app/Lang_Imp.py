@@ -18,8 +18,10 @@ from langgraph.prebuilt import ToolNode
 #from langchain_openai import ChatOpenAI
 #from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from transformers import AutoTokenizer
 
-import json
+import json, os, unicodedata
+from datetime import datetime
 
 from app.Chroma_Imp import vector_store 
 
@@ -36,6 +38,7 @@ SYSTEM_PROMPT = SystemMessage(
 
 PROMPT_NODE_PROMPT = SystemMessage(content=(
     "Analiza el mensaje del usuario y decide si necesita herramientas externas para ser respondido.\n"
+    "Analiza el archivo memory_log.json para ver si preguntas similares fueron respondidas antes. Si el mensaje es similar a uno pasado, responde con needs_tools: false y resuelve con tu conocimiento. Si es una pregunta nueva, responde con needs_tools: true para que el planner genere tareas.\n"
     "Responde ÚNICAMENTE con un JSON con este formato, sin texto adicional:\n"
     '{"needs_tools": true} o {"needs_tools": false}\n'
 ))
@@ -44,8 +47,9 @@ PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.\n"
     "Cada tarea es una petición atómica del usuario.\n"
     "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n\n"
+    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:\n"
-    ' {"task_name": "str", "status": "pending", "task_message": "str", "used_tool": "str"}\n'
+    ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}\n'
 ))
 
 EXECUTOR_PROMPT = SystemMessage(content=(
@@ -62,6 +66,15 @@ WRITER_PROMPT = SystemMessage(content=(
     "Sé conciso y directo."
 ))
 
+MEMORY_PROMPT = SystemMessage(content=(
+    "Tu tarea es tener en cuenta el archivo memory_log.json, que contiene un historial de interacciones pasadas. Úsalo para evitar repetir información o cometer los mismos errores. No es necesario que cites el memory_log, pero úsalo como referencia para mejorar tus respuestas."
+    "Si ves que el usuario hace una pregunta similar a una interacción pasada, intenta dar una respuesta diferente o más completa, aprendiendo de lo que se hizo antes."
+    "En caso de que sea una pregunta nueva, envía como need_tools: true para que el planner genere tareas normalmente. Si es una pregunta repetida, responde con need_tools: false y resuelve con tu conocimiento, pero teniendo en cuenta lo que se hizo antes."
+    "Si consideras que es necesaria una tool, envía como message el motivo por el cual crees que la tool es necesaria, para que el planner pueda tomarlo en cuenta al generar las tareas."
+    "Responde ÚNICAMENTE con un JSON con este formato, sin texto adicional:\n"
+    '{"needs_tools": [true,false], "message": "str"}\n'
+))
+
 TOOL_SET = SystemMessage(
     content=(
         "Tienes acceso a las siguientes herramientas:\n"
@@ -69,6 +82,8 @@ TOOL_SET = SystemMessage(
         "2. consultar_knowledge_base(query): Consulta la base de datos de documentos. Si la query pide nombres, lista todos."
     )
 )
+
+MEMORY_FILE = "app/memory_log.json"
 
 #====================================================================================
 # Definimos el estado de nuestra aplicación como un diccionario de variables
@@ -78,11 +93,13 @@ TOOL_SET = SystemMessage(
 class Task(TypedDict):
     task_name: str
     task_message: str
+    intention: str
     status: Literal["pending", "completed", "failed"]
     message: str
     used_tool: str
 
 class State(TypedDict):
+    actual_node: str
     messages: Annotated[list, add_messages]
     conditional_message: str  # Para trackear el mensaje que decide a qué nodo ir
     iterations: int
@@ -90,7 +107,92 @@ class State(TypedDict):
 
 graph = StateGraph(State)
 #====================================================================================
+# Definimos funciones importantes
+#====================================================================================
+def normalize_text(text: str) -> str:
+    if not isinstance(text, str):
+        return text
 
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return text.lower()
+
+def normalize_safe(data):
+    if isinstance(data, dict):
+        return {
+            k: normalize_safe(v)
+            for k, v in data.items()
+        }
+    elif isinstance(data, list):
+        return [normalize_safe(x) for x in data]
+    elif isinstance(data, str):
+        return normalize_text(data)
+    else:
+        return data
+
+def save_memory(state: State):
+    if not os.path.exists(MEMORY_FILE):
+        data = ["MEMORY DATA:"]
+    else:
+        try:
+            with open(MEMORY_FILE, "r") as f:
+                content = f.read().strip()
+
+                if content == "":
+                    data = []  # archivo vacío
+                else:
+                    data = json.loads(content)
+
+        except json.JSONDecodeError:
+            print("[WARNING] JSON corrupto, reiniciando memoria")
+            data = []
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "node": state.get("actual_node", "unknown"),
+        "iterations": state.get("iterations", 0),
+        "message": normalize_text(state.get("messages", [])[-1].content if state.get("messages") else ""),
+        "tasks": (state.get("tasks", []) if state.get("actual_node", "unknown") != "tool_executor_node" else []),
+        "conditional_message": state.get("conditional_message"),
+    }
+
+    data.append(normalize_safe(entry))
+
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def get_memory_data() -> list[SystemMessage]:
+    if not os.path.exists(MEMORY_FILE):
+        return []
+    
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            content = f.read().strip()
+            if content == "":
+                return []
+            data = json.loads(content)
+    except json.JSONDecodeError:
+        print("[WARNING] JSON corrupto, no se cargará memoria")
+        return []
+
+    # Convertimos cada entrada del log en un SystemMessage para el LLM
+    messages = []
+    for entry in data[-10:]:  # limitamos a las últimas 10 entradas para no saturar
+        msg_content = (
+            f"En el pasado, en el nodo '{entry['node']}' con iteración {entry['iterations']}, se generó el mensaje: '{entry['message']}'. "
+            f"Las tareas asociadas fueron: {entry.get('tasks', [])}. "
+            f"La decisión condicional fue: '{entry.get('conditional_message')}'."
+        )
+        messages.append(SystemMessage(content=msg_content))
+
+    return messages
+
+
+
+
+
+
+#====================================================================================
 # Definimos herramientas, osease, funciones que pueden ser llamadas por un toolnode
 #====================================================================================
 @tool
@@ -104,22 +206,38 @@ def get_weather(location: str):
 @tool
 def consultar_knowledge_base(query: str):
     """Consulta la base de datos de documentos. Si la query pide nombres, lista todos."""
+    #['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content']
+    message = query.split("..INTENTION :")[0].strip()
+    intention = query.split("..INTENTION :")[1].strip() if "..INTENTION :" in query else ""
     try:
-        # Si la pregunta es sobre 'nombres' o 'lista', traemos todo lo que haya
-        if "nombre" in query.lower() or "archivo" in query.lower() or "lista" in query.lower():
+        if intention == "file listing":
+            # Si la pregunta es sobre 'nombres' o 'lista', traemos todo lo que haya
             # .get() trae los registros sin filtrar por similitud de texto
             data = vector_store.get()
             if not data or not data["metadatas"]:
                 return "La base de datos está vacía."
+            
             nombres = list(set([m.get("source") for m in data["metadatas"]]))
             return f"Archivos indexados en la base de datos: {nombres}"
+        if intention == "general analysis":
+            pass
+        if intention == "detect redundancy":
+            pass
+        if intention == "detect incorrect info":
+            pass
+        if intention == "detect conflicts":
+            pass
+        if intention == "detect obsolescence":
+            pass
+        if intention == "detect outdated content":
+            pass
 
         # Búsqueda normal de contenido
         docs = vector_store.similarity_search(query, k=3)
         if not docs:
             return "No encontré información específica sobre eso en los documentos."
         
-        return "\n\n".join([f"Del archivo {d.metadata.get('source')}: {d.page_content}" for d in docs])
+        return "\n <br>".join([f"Del archivo {d.metadata.get('source')}: {d.page_content}" for d in docs])
     except Exception as e:
         return f"Error técnico: {str(e)}"
 
@@ -142,11 +260,26 @@ tool_node = ToolNode(tools) # El ToolNode manejará automáticamente la ejecuci�
 graph.add_node("tool_node", tool_node)
 
 
-# Primer nodo del grafo, que se encarga de generar un mensaje a partir del estado actual
-# Además de generar un mensaje, este nodo también puede llamar a toolnodes, dependiendo del mensaje generado.4
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ====================================================================================
+# DEFINICION DE NODOS
+# ====================================================================================
 def prompt_node(state: State) -> State:
-    """Decide si el mensaje necesita tools o puede responderse directamente."""
-    response = llm.invoke([PROMPT_NODE_PROMPT] + [TOOL_SET] + state["messages"])
+    """Decide si el mensaje necesita tools o puede responderse con memoria."""
+    memory_data = get_memory_data()
+    response = llm.invoke([PROMPT_NODE_PROMPT] + memory_data + [TOOL_SET] + state["messages"])
 
     try:
         parsed = json.loads(response.content)
@@ -154,11 +287,16 @@ def prompt_node(state: State) -> State:
     except Exception:
         need_tools = "no"  # si falla el parse, responde directo
 
+    state["actual_node"] = "prompt_node"
+    save_memory(state)
     return {
         "messages":            [response],
         "conditional_message": need_tools,
         "iterations":          state.get("iterations", 0) + 1,
     }
+
+
+
 
 def planner_node(state: State) -> State:
     """Descompone el mensaje en tasks y las enlista en el estado."""
@@ -170,6 +308,7 @@ def planner_node(state: State) -> State:
             {
                 "task_name":    t["task_name"],
                 "task_message": t["task_message"],
+                "intention":    t["intention"],
                 "status":       "pending",
                 "message":      "",
                 "used_tool":    t.get("used_tool", "none"),
@@ -181,15 +320,22 @@ def planner_node(state: State) -> State:
         tasks = [{
             "task_name":    "tarea_general",
             "task_message": "No se pudo parsear el plan",
+            "intention":    "sin intencion",
             "status":       "failed",
             "message":      f"Error al planificar: {e}",
             "used_tool":    "none",
         }]
 
+    state["actual_node"] = "planner_node"
+    save_memory(state)
+
     return {
         "messages": [response],
         "tasks":    tasks,
     }
+
+
+
 
 def tool_executor_node(state: State) -> State:
     """Toma la primera task pendiente, ejecuta su tool y actualiza su estado."""
@@ -213,7 +359,7 @@ def tool_executor_node(state: State) -> State:
     else:
         try:
             tool_fn   = TOOLS_MAP[task["used_tool"]]
-            resultado = tool_fn.invoke(task["task_message"])
+            resultado = tool_fn.invoke(f"{task['task_message']} ..INTENTION :{task['intention']}")
             tasks[pending_index] = {**task, "status": "completed", "message": resultado}
         except Exception as e:
             tasks[pending_index] = {**task, "status": "failed", "message": f"Error: {e}"}
@@ -226,6 +372,9 @@ def tool_executor_node(state: State) -> State:
         "conditional_message": "pending" if hay_pending else "done",
         "iterations":          state.get("iterations", 0) + 1,
     }
+
+
+
 
 def writer_node(state: State) -> State:
     """Genera la respuesta final iterando todas las tasks."""
@@ -248,12 +397,42 @@ def writer_node(state: State) -> State:
     ))
 
     response = llm.invoke([writer_context] + state["messages"])
+
+    state["actual_node"] = "writer_node"
+    save_memory(state)
+
     return {"messages": [response]}
+
+def memory_node(state: State) -> State:
+    """Usa el registro de memoria para responder. Si el mensaje es nuevo, redirige al planner."""
+
+    memory_data = get_memory_data()  # función para cargar y formatear el memory_log.json
+    response = llm.invoke([MEMORY_PROMPT] + memory_data + state["messages"])
+
+    try:
+        parsed = json.loads(response.content)
+        need_tools  = "yes" if parsed.get("needs_tools") else "no"
+    except Exception:
+        need_tools = "no"  # si falla el parse, responde directo
+
+    state["actual_node"] = "memory_node"
+    save_memory(state)
+    return {
+        "messages":            [response],
+        "conditional_message": need_tools,
+        "iterations":          state.get("iterations", 0) + 1,
+    }
 
 graph.add_node("prompt_node", prompt_node)
 
+
+
+
 # Este es un nodo condicional, según el mensaje generado por prompt node, elije lo que nosotros le digamos.
-def after_prompt(state: State) -> Literal["planner_node", "writer_node"]:
+def after_prompt(state: State) -> Literal["planner_node", "memory_node"]:
+    return "planner_node" if state["conditional_message"] == "yes" else "memory_node"
+
+def after_memory(state: State) -> Literal["planner_node", "writer_node"]:
     return "planner_node" if state["conditional_message"] == "yes" else "writer_node"
 
 def after_executor(state: State) -> Literal["tool_executor_node", "writer_node"]:
@@ -266,11 +445,13 @@ graph.add_node("prompt_node",       prompt_node)
 graph.add_node("planner_node",      planner_node)
 graph.add_node("tool_executor_node",tool_executor_node)
 graph.add_node("writer_node",       writer_node)
+graph.add_node("memory_node",       memory_node)
 
 graph.set_entry_point("prompt_node")
 
 graph.add_conditional_edges("prompt_node",        after_prompt)
 graph.add_edge(              "planner_node",       "tool_executor_node")
+graph.add_conditional_edges("memory_node",        after_memory)
 graph.add_conditional_edges("tool_executor_node",  after_executor)
 graph.add_edge(              "writer_node",        "__end__")
 
