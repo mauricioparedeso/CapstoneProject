@@ -25,6 +25,9 @@ from datetime import datetime
 
 from app.Chroma_Imp import vector_store 
 
+import re
+from datetime import datetime
+
 SYSTEM_PROMPT = SystemMessage(
     content=(
         "Eres un asistente de respuesta consolidada. Sigue estas reglas estrictas:\n"
@@ -46,8 +49,7 @@ PROMPT_NODE_PROMPT = SystemMessage(content=(
 PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.\n"
     "Cada tarea es una petición atómica del usuario.\n"
-    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n\n"
-    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].\n"
+    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:\n"
     ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}\n'
 ))
@@ -75,11 +77,26 @@ MEMORY_PROMPT = SystemMessage(content=(
     '{"needs_tools": [true,false], "message": "str"}\n'
 ))
 
+SPELLING_PROMPT = SystemMessage(content=(
+    "Eres un revisor ortográfico académico.\n"
+    "Analiza únicamente los fragmentos entregados.\n"
+    "Detecta errores ortográficos claros en español o inglés.\n"
+    "No marques como error nombres propios, siglas, rutas, código, comandos o tecnicismos si parecen intencionales.\n"
+    "Devuelve una lista breve con este formato:\n"
+    "- fuente: <archivo>\n"
+    "  error: <texto detectado>\n"
+    "  sugerencia: <corrección>\n"
+    "  contexto: <fragmento corto>\n"
+    "Si no encuentras errores claros, responde exactamente:\n"
+    "No encontré errores ortográficos claros en los fragmentos analizados."
+))
 TOOL_SET = SystemMessage(
     content=(
         "Tienes acceso a las siguientes herramientas:\n"
         "1. get_weather(location): Devuelve el clima actual para una ubicación dada.\n"
-        "2. consultar_knowledge_base(query): Consulta la base de datos de documentos. Si la query pide nombres, lista todos."
+        "2. consultar_knowledge_base(query): Consulta la base de datos de documentos. Si la query pide nombres, lista todos.\n"
+        "3. detectar_errores_ortograficos(query): Detecta posibles errores ortográficos en fragmentos relevantes de la knowledge base.\n"
+        "4. detectar_fechas_erroneas(query): Detecta fechas numéricas inválidas en fragmentos relevantes de la knowledge base."
     )
 )
 
@@ -241,9 +258,96 @@ def consultar_knowledge_base(query: str):
     except Exception as e:
         return f"Error técnico: {str(e)}"
 
+@tool
+def detectar_errores_ortograficos(query: str):
+    """Detecta posibles errores ortográficos en fragmentos relevantes de la knowledge base."""
+    message = query.split("..INTENTION :")[0].strip()
+
+    try:
+        docs = vector_store.similarity_search(message, k=4)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar ortografía."
+
+        contexto = "\n\n".join([
+            f"[Fuente: {d.metadata.get('source', 'desconocido')}]\n{d.page_content}"
+            for d in docs
+        ])
+
+        response = llm.invoke([
+            SPELLING_PROMPT,
+            SystemMessage(content=f"Solicitud del usuario: {message}\n\nFragmentos a revisar:\n{contexto}")
+        ])
+
+        return response.content
+
+    except Exception as e:
+        return f"Error técnico en detector ortográfico: {str(e)}"
+
+@tool
+def detectar_fechas_erroneas(query: str):
+    """Detecta fechas numéricas inválidas en fragmentos relevantes de la knowledge base."""
+    message = query.split("..INTENTION :")[0].strip()
+
+    try:
+        docs = vector_store.similarity_search(message, k=5)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar fechas."
+
+        # Formatos soportados:
+        # dd/mm/yyyy, dd-mm-yyyy, yyyy/mm/dd, yyyy-mm-dd
+        pattern_dmy = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+        pattern_ymd = re.compile(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b")
+
+        hallazgos = []
+
+        for d in docs:
+            source = d.metadata.get("source", "desconocido")
+            text = d.page_content
+
+            for match in pattern_dmy.finditer(text):
+                day, month, year = map(int, match.groups())
+                fecha_str = match.group(0)
+
+                try:
+                    datetime(year, month, day)
+                except ValueError:
+                    hallazgos.append(
+                        f"- fuente: {source}\n"
+                        f"  fecha_detectada: {fecha_str}\n"
+                        f"  problema: fecha calendario inválida"
+                    )
+
+            for match in pattern_ymd.finditer(text):
+                year, month, day = map(int, match.groups())
+                fecha_str = match.group(0)
+
+                try:
+                    datetime(year, month, day)
+                except ValueError:
+                    hallazgos.append(
+                        f"- fuente: {source}\n"
+                        f"  fecha_detectada: {fecha_str}\n"
+                        f"  problema: fecha calendario inválida"
+                    )
+
+        if not hallazgos:
+            return (
+                "No encontré fechas numéricas inválidas en los fragmentos analizados. "
+                "Esta versión detecta fechas imposibles, no contradicciones semánticas."
+            )
+
+        return "\n\n".join(hallazgos[:15])
+
+    except Exception as e:
+        return f"Error técnico en detector de fechas: {str(e)}"
+
 TOOLS_MAP = {
     "get_weather": get_weather,
     "consultar_knowledge_base": consultar_knowledge_base,
+    "detectar_errores_ortograficos": detectar_errores_ortograficos,
+    "detectar_fechas_erroneas": detectar_fechas_erroneas,
 }
     
 llm = ChatGroq(
@@ -252,7 +356,7 @@ llm = ChatGroq(
 )
 
 # Actualiza tu lista de herramientas
-tools = [get_weather, consultar_knowledge_base]
+tools = [get_weather, consultar_knowledge_base, detectar_errores_ortograficos, detectar_fechas_erroneas]
 llm_with_tools = llm.bind_tools(tools)
 tool_node = ToolNode(tools) # El ToolNode manejará automáticamente la ejecución
 
