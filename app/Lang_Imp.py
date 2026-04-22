@@ -20,7 +20,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_groq import ChatGroq
 from transformers import AutoTokenizer
 
-import json, os, unicodedata
+import json, os, unicodedata, enchant
 from datetime import datetime
 
 from app.Chroma_Imp import vector_store 
@@ -49,7 +49,10 @@ PROMPT_NODE_PROMPT = SystemMessage(content=(
 PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.\n"
     "Cada tarea es una petición atómica del usuario.\n"
-    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n"
+    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n\n"
+    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].\n"
+    "Usa como intención 'obsolescence' o 'outdated content' si la tarea es sobre detectar información que ya no es válida o relevante. Usa 'detect incorrect info' para detectar datos que son claramente erróneos, como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.\n"
+    "Si hay 2 tareas con la misma intención, combínalas en una sola tarea con un mensaje que incluya ambas peticiones, para optimizar el uso de herramientas.\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:\n"
     ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}\n'
 ))
@@ -78,25 +81,38 @@ MEMORY_PROMPT = SystemMessage(content=(
 ))
 
 SPELLING_PROMPT = SystemMessage(content=(
-    "Eres un revisor ortográfico académico.\n"
-    "Analiza únicamente los fragmentos entregados.\n"
-    "Detecta errores ortográficos claros en español o inglés.\n"
-    "No marques como error nombres propios, siglas, rutas, código, comandos o tecnicismos si parecen intencionales.\n"
-    "Devuelve una lista breve con este formato:\n"
+    "Eres un sistema experto en detección de errores ortográficos en textos académicos. Tu tarea es analizar posibles errores ortográficos a partir de fragmentos de documentos.\n"
+    "REGLAS IMPORTANTES:\n"
+    "1. Solo marca como error palabras que sean claramente incorrectas en español o inglés.\n"
+    "2. NO marques como error:\n"
+    "   - nombres propios (ej: OpenAI, Bogotá, Juan)\n"
+    "   - siglas (ej: API, LLM, HTTP)\n"
+    "   - rutas, paths o URLs\n"
+    "   - código o identificadores técnicos\n"
+    "   - tecnicismos o términos de dominio\n"
+    "3. Si tienes dudas, NO marques la palabra como error.\n"
+    "ENTRADA:\n"
+    "Recibirás una lista estructurada con este formato:\n"
+    "[{source: str, errors: [str]}]\n"
+    "OBJETIVO:\n"
+    "Revisar cada fuente y decidir si los errores son reales o falsos positivos.\n"
+    "SALIDA OBLIGATORIA:\n"
+    "Devuelve SOLO una lista en este formato:\n"
     "- fuente: <archivo>\n"
-    "  error: <texto detectado>\n"
+    "  error: <palabra incorrecta confirmada>\n"
     "  sugerencia: <corrección>\n"
-    "  contexto: <fragmento corto>\n"
-    "Si no encuentras errores claros, responde exactamente:\n"
+    "  contexto: <explicación breve del por qué es error>\n"
+    "REGLAS DE SALIDA:\n"
+    "- No incluyas texto fuera de la lista.\n"
+    "- Si no hay errores reales, responde exactamente:\n"
     "No encontré errores ortográficos claros en los fragmentos analizados."
 ))
+
 TOOL_SET = SystemMessage(
     content=(
         "Tienes acceso a las siguientes herramientas:\n"
         "1. get_weather(location): Devuelve el clima actual para una ubicación dada.\n"
         "2. consultar_knowledge_base(query): Consulta la base de datos de documentos. Si la query pide nombres, lista todos.\n"
-        "3. detectar_errores_ortograficos(query): Detecta posibles errores ortográficos en fragmentos relevantes de la knowledge base.\n"
-        "4. detectar_fechas_erroneas(query): Detecta fechas numéricas inválidas en fragmentos relevantes de la knowledge base."
     )
 )
 
@@ -226,6 +242,9 @@ def consultar_knowledge_base(query: str):
     #['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content']
     message = query.split("..INTENTION :")[0].strip()
     intention = query.split("..INTENTION :")[1].strip() if "..INTENTION :" in query else ""
+    
+    hallazgos = [" "]
+
     try:
         if intention == "file listing":
             # Si la pregunta es sobre 'nombres' o 'lista', traemos todo lo que haya
@@ -241,7 +260,10 @@ def consultar_knowledge_base(query: str):
         if intention == "detect redundancy":
             pass
         if intention == "detect incorrect info":
-            pass
+            hallazgos.append(detectar_fechas_invalidas(message))
+            hallazgos.append(detectar_errores_ortograficos(message))
+
+
         if intention == "detect conflicts":
             pass
         if intention == "detect obsolescence":
@@ -254,43 +276,54 @@ def consultar_knowledge_base(query: str):
         if not docs:
             return "No encontré información específica sobre eso en los documentos."
         
-        return "\n <br>".join([f"Del archivo {d.metadata.get('source')}: {d.page_content}" for d in docs])
+
+        return f"\n <br> Se encontraron los siguientes hallazgos: {', '.join(hallazgos)}"
     except Exception as e:
         return f"Error técnico: {str(e)}"
 
-@tool
+
+
+
 def detectar_errores_ortograficos(query: str):
     """Detecta posibles errores ortográficos en fragmentos relevantes de la knowledge base."""
     message = query.split("..INTENTION :")[0].strip()
 
+    dictionary = enchant.Dict("es")  # Diccionario para español. Cambia a "en_US" para inglés.
+
     try:
-        docs = vector_store.similarity_search(message, k=4)
+        docs = vector_store.similarity_search("texto general", k=20)
+        invalid_by_source = []
 
-        if not docs:
-            return "No encontré fragmentos relevantes para revisar ortografía."
+        for d in docs:
+            text = d.page_content
+            source = d.metadata.get("source", "desconocido")
 
-        contexto = "\n\n".join([
-            f"[Fuente: {d.metadata.get('source', 'desconocido')}]\n{d.page_content}"
-            for d in docs
-        ])
+            words = re.findall(r"\b\w+\b", text.lower())
 
-        response = llm.invoke([
-            SPELLING_PROMPT,
-            SystemMessage(content=f"Solicitud del usuario: {message}\n\nFragmentos a revisar:\n{contexto}")
-        ])
+            invalid_words = [w for w in words if not dictionary.check(w)]
 
+            if invalid_words:
+                invalid_by_source.append({
+                    "source": source,
+                    "errors": list(set(invalid_words))
+                })
+
+        response = llm.invoke([SPELLING_PROMPT] + [SystemMessage(content=f"Solicitud del usuario: {message}\n\nFragmentos a revisar:\n{invalid_by_source}")])
+        print(response.content)
         return response.content
 
     except Exception as e:
         return f"Error técnico en detector ortográfico: {str(e)}"
 
-@tool
-def detectar_fechas_erroneas(query: str):
+
+
+
+def detectar_fechas_invalidas(query: str):
     """Detecta fechas numéricas inválidas en fragmentos relevantes de la knowledge base."""
     message = query.split("..INTENTION :")[0].strip()
 
     try:
-        docs = vector_store.similarity_search(message, k=5)
+        docs = vector_store.similarity_search("all", k=20)
 
         if not docs:
             return "No encontré fragmentos relevantes para revisar fechas."
@@ -342,12 +375,16 @@ def detectar_fechas_erroneas(query: str):
 
     except Exception as e:
         return f"Error técnico en detector de fechas: {str(e)}"
+    
+
+
+
+
+
 
 TOOLS_MAP = {
     "get_weather": get_weather,
     "consultar_knowledge_base": consultar_knowledge_base,
-    "detectar_errores_ortograficos": detectar_errores_ortograficos,
-    "detectar_fechas_erroneas": detectar_fechas_erroneas,
 }
     
 llm = ChatGroq(
@@ -356,7 +393,7 @@ llm = ChatGroq(
 )
 
 # Actualiza tu lista de herramientas
-tools = [get_weather, consultar_knowledge_base, detectar_errores_ortograficos, detectar_fechas_erroneas]
+tools = [get_weather, consultar_knowledge_base]
 llm_with_tools = llm.bind_tools(tools)
 tool_node = ToolNode(tools) # El ToolNode manejará automáticamente la ejecución
 
@@ -488,6 +525,7 @@ def writer_node(state: State) -> State:
     if not tasks:
         # fallback cuando no hay planner
         response = llm.invoke([WRITER_PROMPT] + state["messages"])
+        print(f"Uso de tokens en writer: {response.response_metadata['token_usage']}")
         return {"messages": [response]}
 
     resumen = "\n".join([
@@ -499,9 +537,9 @@ def writer_node(state: State) -> State:
         f"{WRITER_PROMPT.content}\n\n"
         f"Lista de tareas ejecutadas:\n{resumen}"
     ))
-
+   
     response = llm.invoke([writer_context] + state["messages"])
-
+    print(f"Uso de tokens en writer: {response.response_metadata['token_usage']}")
     state["actual_node"] = "writer_node"
     save_memory(state)
 
@@ -561,9 +599,11 @@ graph.add_edge(              "writer_node",        "__end__")
 
 APP = graph.compile()
 
+
+
 if __name__ == "__main__":
     print("=================================================\nINICIO DE LA COMPILACION\n=================================================")
-    new_state = APP.invoke({"messages": ["dame la suma del 1 al 10, el clima en yorkshire, y el clima en bogotá, y los nombres de los archivos de mi knowledge base, y porque los zorros articos comen zapatos"]})
+    new_state = APP.invoke({"messages": ["dame la suma del 1 al 10, el clima en yorkshire, y el clima en bogota, y los nombres de los archivos de mi knowledge base, revisa que errores de fecha y ortografia tienen, y dime porque los zorros articos comen zapatos"]})
     print(new_state["messages"][-1].content)
     print("=================================================\nFIN DE LA COMPILACION\n=================================================")
 

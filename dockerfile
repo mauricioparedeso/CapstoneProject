@@ -12,6 +12,8 @@ COPY requirements.txt .
 
 # Instalar dependencias
 RUN pip install --no-cache-dir -r requirements.txt
+RUN sudo apt-get install -y libenchant-2-2
+RUN sudo apt-get install -y aspell-es
 
 # Copiar el resto del código
 COPY . .
