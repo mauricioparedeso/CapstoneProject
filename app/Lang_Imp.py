@@ -1,5 +1,6 @@
 with open(".gitignore/API_KEY.txt", "r") as f:
-    API_KEY = f.read().strip()
+    API_KEYS = [line.strip() for line in f.readlines()]
+    API_KEY = API_KEYS[2]
 
 # git reset --soft HEAD~1
 
@@ -22,6 +23,7 @@ from transformers import AutoTokenizer
 
 import json, os, unicodedata, enchant
 from datetime import datetime
+from collections import defaultdict
 
 from app.Chroma_Imp import vector_store 
 
@@ -80,33 +82,67 @@ MEMORY_PROMPT = SystemMessage(content=(
     '{"needs_tools": [true,false], "message": "str"}\n'
 ))
 
-SPELLING_PROMPT = SystemMessage(content=(
-    "Eres un sistema experto en detección de errores ortográficos en textos académicos. Tu tarea es analizar posibles errores ortográficos a partir de fragmentos de documentos.\n"
-    "REGLAS IMPORTANTES:\n"
-    "1. Solo marca como error palabras que sean claramente incorrectas en español o inglés.\n"
-    "2. NO marques como error:\n"
-    "   - nombres propios (ej: OpenAI, Bogotá, Juan)\n"
-    "   - siglas (ej: API, LLM, HTTP)\n"
-    "   - rutas, paths o URLs\n"
-    "   - código o identificadores técnicos\n"
-    "   - tecnicismos o términos de dominio\n"
-    "3. Si tienes dudas, NO marques la palabra como error.\n"
-    "ENTRADA:\n"
-    "Recibirás una lista estructurada con este formato:\n"
-    "[{source: str, errors: [str]}]\n"
-    "OBJETIVO:\n"
-    "Revisar cada fuente y decidir si los errores son reales o falsos positivos.\n"
-    "SALIDA OBLIGATORIA:\n"
-    "Devuelve SOLO una lista en este formato:\n"
-    "- fuente: <archivo>\n"
-    "  error: <palabra incorrecta confirmada>\n"
-    "  sugerencia: <corrección>\n"
-    "  contexto: <explicación breve del por qué es error>\n"
-    "REGLAS DE SALIDA:\n"
-    "- No incluyas texto fuera de la lista.\n"
-    "- Si no hay errores reales, responde exactamente:\n"
-    "No encontré errores ortográficos claros en los fragmentos analizados."
+QUERY_PROMPT = SystemMessage(content=(
+    "Eres un generador de queries para recuperación semántica en una base vectorial.\n"
+    "Tu objetivo es recuperar el fragmento ORIGINAL del documento donde aparece un texto problemático.\n\n"
+
+    "REGLAS:\n"
+    "1. La query debe parecerse lo máximo posible al texto original del documento.\n"
+    "2. Incluye:\n"
+    "   - La palabra problemática exacta (ej: 'caido')\n"
+    "   - 5 a 15 palabras de contexto cercano (si están disponibles)\n"
+    "3. NO incluyas:\n"
+    "   - Explicaciones\n"
+    "   - 'error ortográfico', 'problema', etc\n"
+    "   - lenguaje meta\n\n"
+
+    "4. La query debe ser una frase natural que podría existir dentro del documento.\n\n"
+
+    "EJEMPLO:\n"
+    "Entrada:\n"
+    "error: 'caido'\n"
+    "Salida:\n"
+    "\"...se habia caido detras de la casa mientras la luz palida filtrava...\"\n\n"
+
+    "SALIDA (JSON estricto):\n"
+    "[{\"task_name\": \"str\", \"needs_suggestion\": true/false, \"suggestion_message\": \"query\"}]"
 ))
+
+SPELLING_PROMPT = SystemMessage(content=(
+    "Filtra errores ortográficos reales en textos.\n\n"
+
+    "REGLAS:\n"
+    "- Solo incluye palabras claramente incorrectas en español o inglés\n"
+    "- Elimina:\n"
+    "  * nombres propios\n"
+    "  * siglas\n"
+    "  * URLs\n"
+    "  * código o identificadores técnicos\n"
+    "  * tecnicismos\n"
+    "- NO expliques nada\n"
+    "- NO agregues texto adicional\n"
+    "- NO repitas sources\n\n"
+
+    "FORMATO OBLIGATORIO:\n"
+    "Devuelve JSON válido:\n"
+    "[{\"source\": \"str\", \"errors\": [\"str\"]}]\n\n"
+
+    "REGLAS DE SALIDA:\n"
+    "- Si un source queda sin errores, elimínalo\n"
+    "- Máximo 15 errores por source\n"
+    "- Si no hay errores, responde con los 40 errores mas relevantes, usando el mismo formato"
+))
+
+
+
+
+
+
+
+
+
+
+
 
 TOOL_SET = SystemMessage(
     content=(
@@ -117,6 +153,18 @@ TOOL_SET = SystemMessage(
 )
 
 MEMORY_FILE = "app/memory_log.json"
+
+
+
+
+
+
+
+
+
+
+
+
 
 #====================================================================================
 # Definimos el estado de nuestra aplicación como un diccionario de variables
@@ -130,6 +178,9 @@ class Task(TypedDict):
     status: Literal["pending", "completed", "failed"]
     message: str
     used_tool: str
+    need_suggestion: bool
+    suggestion_message: str
+    suggestion: str
 
 class State(TypedDict):
     actual_node: str
@@ -225,6 +276,11 @@ def get_memory_data() -> list[SystemMessage]:
 
 
 
+
+
+
+
+
 #====================================================================================
 # Definimos herramientas, osease, funciones que pueden ser llamadas por un toolnode
 #====================================================================================
@@ -284,33 +340,107 @@ def consultar_knowledge_base(query: str):
 
 
 
-def detectar_errores_ortograficos(query: str):
-    """Detecta posibles errores ortográficos en fragmentos relevantes de la knowledge base."""
-    message = query.split("..INTENTION :")[0].strip()
 
-    dictionary = enchant.Dict("es")  # Diccionario para español. Cambia a "en_US" para inglés.
+
+
+
+
+
+
+
+
+
+def is_valid_word(word):
+    # longitud mínima
+    if len(word) <= 2:
+        return False
+
+    # números o alfanuméricos
+    if re.search(r"\d", word):
+        return False
+
+    # todo mayúsculas o códigos raros
+    if word.isupper():
+        return False
+
+    # mezcla rara tipo computaciónma03439
+    if re.search(r"[a-zA-Z]+\d+[a-zA-Z]*", word):
+        return False
+
+    return True
+
+def detectar_errores_ortograficos(query: str):
+    """Detecta errores ortográficos reales en la knowledge base de forma robusta."""
+
+    message = query.split("..INTENTION :")[0].strip()
+    dictionary = enchant.Dict("es")
 
     try:
         docs = vector_store.similarity_search("texto general", k=20)
-        invalid_by_source = []
 
+        grouped_errors = defaultdict(set)
+
+        # 1. PRE-FILTRADO LOCAL (rápido y determinista)
         for d in docs:
             text = d.page_content
             source = d.metadata.get("source", "desconocido")
 
             words = re.findall(r"\b\w+\b", text.lower())
 
-            invalid_words = [w for w in words if not dictionary.check(w)]
+            for w in words:
+                w_norm = normalize_text(w)
 
-            if invalid_words:
-                invalid_by_source.append({
+                if not is_valid_word(w_norm):
+                    continue
+
+                if not dictionary.check(w_norm):
+                    grouped_errors[source].add(w_norm)
+
+        # 2. LIMPIEZA Y REDUCCIÓN (clave para el LLM)
+        cleaned_input = [
+            {
+                "source": src,
+                "errors": list(errors)[:15]  # límite duro
+            }
+            for src, errors in grouped_errors.items()
+            if errors
+        ]
+
+        if not cleaned_input:
+            return []
+
+        # 3. LLAMADA AL LLM (solo para refinar)
+        response = llm.invoke([
+            SPELLING_PROMPT,
+            SystemMessage(content=f"Fragmentos a revisar:\n{cleaned_input}")
+        ])
+
+        # 4. VALIDACIÓN DE SALIDA
+        try:
+            parsed = json.loads(response.content)
+
+            final = []
+            seen_sources = set()
+
+            for item in parsed:
+                source = item.get("source")
+                errors = item.get("errors", [])
+
+                if not source or source in seen_sources:
+                    continue
+
+                final.append({
                     "source": source,
-                    "errors": list(set(invalid_words))
+                    "errors": list(set(errors))[:15]
                 })
 
-        response = llm.invoke([SPELLING_PROMPT] + [SystemMessage(content=f"Solicitud del usuario: {message}\n\nFragmentos a revisar:\n{invalid_by_source}")])
-        print(response.content)
-        return response.content
+                seen_sources.add(source)
+
+            return final
+
+        except Exception:
+            # fallback seguro si el LLM falla
+            return cleaned_input
 
     except Exception as e:
         return f"Error técnico en detector ortográfico: {str(e)}"
@@ -565,7 +695,53 @@ def memory_node(state: State) -> State:
         "iterations":          state.get("iterations", 0) + 1,
     }
 
-graph.add_node("prompt_node", prompt_node)
+def query_node(state: State) -> State:
+    tasks = state.get("tasks", [])
+
+    # Construimos contexto claro para el LLM
+    TASKS_CONTEXT = "TAREAS:\n" + "\n".join([
+        f"- task_name: {t['task_name']}\n"
+        f"  status: {t['status']}\n"
+        f"  resultado: {t['message']}\n"
+        for t in tasks
+    ])
+
+    response = llm.invoke([QUERY_PROMPT] + [TASKS_CONTEXT])
+
+    try:
+        suggestions = json.loads(response.content)
+
+        # Mapeo por nombre de task
+        suggestion_map = {
+            s["task_name"]: s for s in suggestions
+        }
+
+        new_tasks = []
+        for t in tasks:
+            s = suggestion_map.get(t["task_name"], {})
+
+            new_tasks.append({
+                **t,
+                "need_suggestion": s.get("needs_suggestion", False),
+                "suggestion_message": s.get("suggestion_message", "")
+            })
+
+    except Exception as e:
+        # fallback seguro
+        new_tasks = [
+            {**t, "need_suggestion": False, "suggestion_message": ""}
+            for t in tasks
+        ]
+
+    return {
+        "tasks": new_tasks,
+        "messages": [response]
+    }
+
+
+
+
+
 
 
 
@@ -577,8 +753,8 @@ def after_prompt(state: State) -> Literal["planner_node", "memory_node"]:
 def after_memory(state: State) -> Literal["planner_node", "writer_node"]:
     return "planner_node" if state["conditional_message"] == "yes" else "writer_node"
 
-def after_executor(state: State) -> Literal["tool_executor_node", "writer_node"]:
-    return "tool_executor_node" if state["conditional_message"] == "pending" else "writer_node"
+def after_executor(state: State) -> Literal["tool_executor_node", "query_node"]:
+    return "tool_executor_node" if state["conditional_message"] == "pending" else "query_node"
 
 # Agregamos nodos y edges al grafo
 graph = StateGraph(State)
@@ -588,13 +764,14 @@ graph.add_node("planner_node",      planner_node)
 graph.add_node("tool_executor_node",tool_executor_node)
 graph.add_node("writer_node",       writer_node)
 graph.add_node("memory_node",       memory_node)
-
+graph.add_node("query_node",        query_node)
 graph.set_entry_point("prompt_node")
 
 graph.add_conditional_edges("prompt_node",        after_prompt)
 graph.add_edge(              "planner_node",       "tool_executor_node")
 graph.add_conditional_edges("memory_node",        after_memory)
 graph.add_conditional_edges("tool_executor_node",  after_executor)
+graph.add_edge(              "query_node",         "writer_node")
 graph.add_edge(              "writer_node",        "__end__")
 
 APP = graph.compile()
