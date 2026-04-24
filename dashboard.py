@@ -11,6 +11,7 @@ Requiere que la API esté corriendo en:
 
 import streamlit as st
 import requests
+import json
 from datetime import datetime
 
 # ── Configuración ─────────────────────────────────────────────────────────────
@@ -30,8 +31,8 @@ st.markdown("""
 <style>
     /* Paleta SoftServe */
     :root {
-        --ss-orange: #FC5C31;
-        --ss-orange-light: #EE9474;
+        --ss-blue: #0099D8;
+        --ss-blue-light: #5BC4F0;
         --ss-dark: #2C2C2C;
         --ss-gray: #6C6C6C;
         --ss-light: #DCE3E7;
@@ -40,7 +41,7 @@ st.markdown("""
 
     /* Header principal */
     .ss-header {
-        background-color: var(--ss-orange);
+        background-color: var(--ss-blue);
         color: white;
         padding: 1.2rem 2rem;
         border-radius: 8px;
@@ -65,14 +66,14 @@ st.markdown("""
     .doc-card {
         background: white;
         border: 1px solid var(--ss-light);
-        border-left: 4px solid var(--ss-orange);
+        border-left: 4px solid var(--ss-blue);
         border-radius: 6px;
         padding: 1rem 1.2rem;
         margin-bottom: 0.8rem;
         transition: box-shadow 0.2s;
     }
     .doc-card:hover {
-        box-shadow: 0 2px 8px rgba(252,92,49,0.15);
+        box-shadow: 0 2px 8px rgba(0,153,216,0.15);
     }
     .doc-title {
         font-weight: 600;
@@ -97,14 +98,16 @@ st.markdown("""
 
     /* Chat */
     .chat-user {
+        color: #1a1a1a !important;
         background: #FFF3F0;
-        border-left: 3px solid var(--ss-orange);
+        border-left: 3px solid var(--ss-blue);
         border-radius: 4px;
         padding: 0.8rem 1rem;
         margin: 0.5rem 0;
         font-size: 0.9rem;
     }
     .chat-agent {
+        color: #1a1a1a !important;
         background: #F5F5F5;
         border-left: 3px solid var(--ss-gray);
         border-radius: 4px;
@@ -112,6 +115,8 @@ st.markdown("""
         margin: 0.5rem 0;
         font-size: 0.9rem;
     }
+    .chat-user * { color: #1a1a1a !important; }
+    .chat-agent * { color: #1a1a1a !important; }
     .chat-label {
         font-size: 0.75rem;
         font-weight: 600;
@@ -119,7 +124,7 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
-    .chat-label.user { color: var(--ss-orange); }
+    .chat-label.user { color: var(--ss-blue); }
     .chat-label.agent { color: var(--ss-gray); }
 
     /* Sugerencias placeholder */
@@ -133,7 +138,7 @@ st.markdown("""
     }
     .coming-soon {
         background: #FFF8F7;
-        border: 2px dashed var(--ss-orange-light);
+        border: 2px dashed var(--ss-blue-light);
         border-radius: 8px;
         padding: 2rem;
         text-align: center;
@@ -158,14 +163,14 @@ st.markdown("""
 
     /* Botones */
     .stButton > button {
-        background-color: var(--ss-orange);
+        background-color: var(--ss-blue);
         color: white;
         border: none;
         border-radius: 4px;
         font-weight: 500;
     }
     .stButton > button:hover {
-        background-color: #E04820;
+        background-color: #007DAF;
         color: white;
     }
 
@@ -187,8 +192,7 @@ def get_documents():
         r = requests.get(f"{API_BASE}/documents/", timeout=10)
         if r.status_code == 200:
             return r.json().get("documents", [])
-    except Exception as e:
-        st.error(f"Error en API: {e}")
+    except Exception:
         pass
     return None
 
@@ -212,27 +216,92 @@ def chat_with_agent(message):
             json={"message": message},
             timeout=60,
         )
-        
-        print(r.json())
-
-        data = r.json()
-
-        if "error" in data:
-            return data["error"]
-
-        return data.get("respuesta", "Sin respuesta del agente.")
-        
+        if r.status_code == 200:
+            return r.json().get("respuesta", "Sin respuesta del agente.")
     except Exception as e:
         return f"Error al conectar con el agente: {e}"
     return "Error inesperado."
+
+
+def chat_with_agent_stream(message, placeholder_progreso):
+    """
+    Llama al endpoint de streaming y actualiza un placeholder con el progreso.
+    Retorna la respuesta final del agente.
+    """
+    NODOS_ICONO = {
+        "memory_node":        "Consultando memoria",
+        "prompt_node":        "Analizando la pregunta",
+        "planner_node":       "Planificando tareas",
+        "tool_executor_node": "Ejecutando herramientas",
+        "query_node":         "Generando sugerencias",
+        "writer_node":        "Redactando respuesta final",
+    }
+    NODOS_ORDEN = list(NODOS_ICONO.keys())
+    TOTAL = len(NODOS_ORDEN)
+
+    respuesta_final = ""
+    pasos_completados = []
+
+    try:
+        r = requests.post(
+            f"{API_BASE}/agente/chat/stream",
+            json={"message": message},
+            timeout=120,
+        )
+
+        eventos = r.text.strip().split("\n\n")
+        for evento in eventos:
+            for line in evento.split("\n"):
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[5:].strip())
+                except Exception:
+                    continue
+
+                if data.get("tipo") == "progreso":
+                    nodo = data.get("nodo", "")
+                    label = NODOS_ICONO.get(nodo, nodo)
+                    pct = data.get("porcentaje", 0)
+                    pasos_completados.append((label, pct))
+
+                    with placeholder_progreso.container():
+                        st.markdown(f"""
+                        <div style="background:#1a1a2e; border:1px solid #0099D8; border-radius:10px; padding:1rem 1.5rem; margin:0.5rem 0;">
+                            <p style="color:#0099D8; font-weight:700; font-size:0.85rem; margin:0 0 0.8rem 0; letter-spacing:1px;">PROCESANDO PIPELINE</p>
+                        """, unsafe_allow_html=True)
+                        st.progress(pct, text=f"{label}... {pct}%")
+                        for paso_label, paso_pct in pasos_completados[:-1]:
+                            st.markdown(f"<p style='color:#aaa; font-size:0.82rem; margin:0.2rem 0;'>✓ {paso_label}</p>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='color:#0099D8; font-size:0.85rem; font-weight:600; margin:0.2rem 0;'>▶ {label}</p>", unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                elif data.get("tipo") == "fin":
+                    respuesta_final = data.get("respuesta", "")
+                    with placeholder_progreso.container():
+                        st.markdown(f"""
+                        <div style="background:#0d2b1a; border:1px solid #00c853; border-radius:10px; padding:1rem 1.5rem; margin:0.5rem 0;">
+                            <p style="color:#00c853; font-weight:700; font-size:0.85rem; margin:0 0 0.5rem 0; letter-spacing:1px;">PIPELINE COMPLETADO</p>
+                        """, unsafe_allow_html=True)
+                        st.progress(100, text="Completado — 100%")
+                        for paso_label, _ in pasos_completados:
+                            st.markdown(f"<p style='color:#aaa; font-size:0.82rem; margin:0.2rem 0;'>✓ {paso_label}</p>", unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                elif data.get("tipo") == "error":
+                    respuesta_final = f"Error: {data.get('mensaje', 'desconocido')}"
+
+    except Exception as e:
+        respuesta_final = f"Error al conectar con el agente: {e}"
+
+    return respuesta_final
 
 
 def check_api():
     try:
         r = requests.get(f"{API_BASE}/health", timeout=5)
         return r.status_code == 200
-    except Exception as e:
-        st.error(f"Error en API: {e}")
+    except Exception:
         return False
 
 
@@ -260,13 +329,13 @@ else:
 with st.sidebar:
     st.markdown("### Navegación")
     pagina = st.radio(
-        "Navegación",
+        "",
         ["Documentos", "Consultar Agente", "Sugerencias"],
         label_visibility="collapsed",
     )
     st.markdown("---")
     st.markdown("**API**")
-    st.markdown(f"<p style='color:#FC5C31; font-size:0.75rem; word-break:break-all;'>{API_BASE}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='color:#0099D8; font-size:0.75rem; word-break:break-all;'>{API_BASE}</p>", unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("**Épica E4** — Instructor Dashboard")
     st.markdown("Sprint 2 · En progreso")
@@ -357,21 +426,17 @@ elif pagina == "Consultar Agente":
     # Mostrar historial
     for msg in st.session_state.chat_history:
         if msg["role"] == "user":
-            contenido = msg["content"].replace("\n", "<br>")
-
             st.markdown(f"""
             <div class="chat-user">
                 <div class="chat-label user">Instructor</div>
-                {contenido}
+                {msg["content"]}
             </div>
             """, unsafe_allow_html=True)
         else:
-            contenido = msg["content"].replace("\n", "<br>")
-
             st.markdown(f"""
             <div class="chat-agent">
                 <div class="chat-label agent">Agente IA</div>
-                {contenido}
+                {msg["content"]}
             </div>
             """, unsafe_allow_html=True)
 
@@ -400,11 +465,19 @@ elif pagina == "Consultar Agente":
 
     if enviar and pregunta.strip():
         st.session_state.chat_history.append({"role": "user", "content": pregunta})
-        with st.spinner("El agente está pensando..."):
-            respuesta = chat_with_agent(pregunta)
-        st.session_state.chat_history.append({"role": "agent", "content": respuesta})
         if "chat_input" in st.session_state:
             del st.session_state["chat_input"]
+        # Crear placeholder para el progreso
+        placeholder = st.empty()
+        respuesta = chat_with_agent_stream(pregunta, placeholder)
+        # Limpiar el placeholder de progreso
+        placeholder.empty()
+        # Guardar respuesta
+        if respuesta and respuesta.strip():
+            st.session_state.chat_history.append({"role": "agent", "content": respuesta})
+        else:
+            respuesta_fallback = chat_with_agent(pregunta)
+            st.session_state.chat_history.append({"role": "agent", "content": respuesta_fallback})
         st.rerun()
 
 
@@ -416,7 +489,7 @@ elif pagina == "Sugerencias":
 
     st.markdown("""
     <div class="coming-soon">
-        <h3 style="color:#FC5C31; margin-bottom:0.5rem">Proximamente disponible</h3>
+        <h3 style="color:#0099D8; margin-bottom:0.5rem">Proximamente disponible</h3>
         <p style="margin:0">Esta sección estará activa cuando E3 genere sugerencias estructuradas.<br>
         El endpoint <code>POST /suggestions/review</code> está reservado para esta integración.</p>
     </div>

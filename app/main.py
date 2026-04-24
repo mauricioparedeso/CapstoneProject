@@ -6,6 +6,10 @@ Arranca con:
     python -m uvicorn app.main:app --reload --reload-exclude "app/chroma_data/*"
     https://reimagined-acorn-xjjq9gq564x2j6v-8000.app.github.dev/docs
 """
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
+
 from fastapi import FastAPI
 
 from app.models.document import create_tables
@@ -64,3 +68,76 @@ async def chatear_con_agente(query: ChatQuery):
     except Exception as e:
         return {"error": f"Error al ejecutar el agente: {str(e)}"}
 
+@app.post("/agente/chat/stream", tags=["agente"])
+async def chatear_con_agente_stream(query: ChatQuery):
+    """
+    Ejecuta el grafo de LangGraph con streaming.
+    Emite Server-Sent Events con el nodo actual y porcentaje de progreso.
+    """
+    NODOS_ORDEN = [
+        "memory_node",
+        "prompt_node",
+        "planner_node",
+        "tool_executor_node",
+        "query_node",
+        "writer_node",
+    ]
+    NODOS_LABEL = {
+        "memory_node":        "Consultando memoria...",
+        "prompt_node":        "Analizando la pregunta...",
+        "planner_node":       "Planificando tareas...",
+        "tool_executor_node": "Ejecutando herramientas...",
+        "query_node":         "Generando sugerencias...",
+        "writer_node":        "Redactando respuesta...",
+    }
+
+    async def generate():
+        try:
+            inputs = {"messages": [("user", query.message)]}
+            nodos_vistos = []
+            respuesta_final = ""
+
+            for chunk in agente_grafo.stream(
+                inputs,
+                config={"recursion_limit": 50},
+                stream_mode="updates",
+            ):
+                for node_name, node_output in chunk.items():
+                    if node_name not in nodos_vistos:
+                        nodos_vistos.append(node_name)
+
+                    porcentaje = int(
+                        (len(nodos_vistos) / len(NODOS_ORDEN)) * 100
+                    )
+                    porcentaje = min(porcentaje, 95)  # reservar 100% para el final
+
+                    evento = {
+                        "tipo": "progreso",
+                        "nodo": node_name,
+                        "label": NODOS_LABEL.get(node_name, node_name),
+                        "porcentaje": porcentaje,
+                        "nodos_completados": nodos_vistos,
+                    }
+                    yield f"data: {json.dumps(evento)}\n\n"
+                    await asyncio.sleep(0)  # ceder control al event loop
+
+                    # Capturar respuesta del writer
+                    if node_name == "writer_node":
+                        msgs = node_output.get("messages", [])
+                        if msgs:
+                            respuesta_final = msgs[-1].content
+
+            # Evento final con la respuesta
+            yield f"data: {json.dumps({'tipo': 'fin', 'porcentaje': 100, 'respuesta': respuesta_final})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'tipo': 'error', 'mensaje': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
