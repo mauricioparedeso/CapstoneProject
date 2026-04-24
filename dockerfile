@@ -1,26 +1,24 @@
-# Imagen base
 FROM python:3.11-slim
 
-# Evita problemas de buffer
 ENV PYTHONUNBUFFERED=1
 
-# Directorio de trabajo
 WORKDIR /app
 
-# Copiar dependencias primero (mejor cache)
+# Instalar dependencias del sistema (BIEN HECHO)
+RUN apt-get update && apt-get install -y \
+    libenchant-2-2 \
+    aspell-es \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar requirements primero (cache)
 COPY requirements.txt .
 
-# Instalar dependencias
 RUN pip install --no-cache-dir -r requirements.txt
-RUN sudo apt-get install -y libenchant-2-2
-RUN sudo apt-get install -y aspell-es
 
-# Copiar el resto del código
+# Copiar código
 COPY . .
 
-# Exponer puertos (informativo)
 EXPOSE 8000
 EXPOSE 8501
 
-# Comando por defecto (se sobreescribe en docker-compose)
-CMD ["python"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--reload"]

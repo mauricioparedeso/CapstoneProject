@@ -1,6 +1,6 @@
 with open(".gitignore/API_KEY.txt", "r") as f:
     API_KEYS = [line.strip() for line in f.readlines()]
-    API_KEY = API_KEYS[2]
+    API_KEY = API_KEYS[1]
 
 # git reset --soft HEAD~1
 
