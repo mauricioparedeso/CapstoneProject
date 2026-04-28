@@ -41,7 +41,7 @@ st.markdown("""
 
     /* Header principal */
     .ss-header {
-        background-color: var(--ss-blue);
+        background: linear-gradient(135deg, #0D1B2A 0%, #0A2A4A 60%, #003A5C 100%);
         color: white;
         padding: 1.2rem 2rem;
         border-radius: 8px;
@@ -49,6 +49,8 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 1rem;
+        border-left: 4px solid #0099D8;
+        box-shadow: 0 4px 20px rgba(0, 153, 216, 0.2);
     }
     .ss-header h1 {
         margin: 0;
@@ -145,9 +147,10 @@ st.markdown("""
         color: var(--ss-gray);
     }
 
-    /* Sidebar — fondo oscuro y todo el texto en blanco */
+    /* Sidebar — azul marino oscuro */
     [data-testid="stSidebar"] {
-        background-color: #2C2C2C !important;
+        background-color: #0A1628 !important;
+        border-right: 1px solid #0099D8 !important;
     }
     [data-testid="stSidebar"] h1,
     [data-testid="stSidebar"] h2,
@@ -180,6 +183,38 @@ st.markdown("""
         border: 1px solid var(--ss-light);
         border-radius: 8px;
         padding: 0.5rem;
+    }
+
+    /* Radio button — quitar naranja, poner cian */
+    [data-testid="stRadio"] label div[data-testid="stMarkdownContainer"] p {
+        color: white !important;
+    }
+    .st-emotion-cache-j7qwjs, .st-bo, .st-bp {
+        border-color: #0099D8 !important;
+    }
+    [data-testid="stRadio"] input[type="radio"]:checked + div {
+        border-color: #0099D8 !important;
+        background-color: #0099D8 !important;
+    }
+
+    /* File uploader — drag and drop */
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #0099D8 !important;
+        border-radius: 8px !important;
+        background: rgba(0, 153, 216, 0.05) !important;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: #007DAF !important;
+        background: rgba(0, 153, 216, 0.1) !important;
+    }
+    [data-testid="stFileUploaderDropzone"] {
+        border: 2px dashed #0099D8 !important;
+        border-radius: 8px !important;
+        background: rgba(0, 153, 216, 0.05) !important;
+    }
+    [data-testid="stFileUploaderDropzone"]:hover {
+        border-color: #007DAF !important;
+        background: rgba(0, 153, 216, 0.1) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -297,6 +332,16 @@ def chat_with_agent_stream(message, placeholder_progreso):
     return respuesta_final
 
 
+def search_chromadb(query: str, n_results: int = 3):
+    """Search ChromaDB directly and return relevant chunks."""
+    try:
+        from app.Chroma_Imp import vector_store
+        results = vector_store.similarity_search(query, k=n_results)
+        return results
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def check_api():
     try:
         r = requests.get(f"{API_BASE}/health", timeout=5)
@@ -333,13 +378,6 @@ with st.sidebar:
         ["Documentos", "Consultar Agente", "Sugerencias"],
         label_visibility="collapsed",
     )
-    st.markdown("---")
-    st.markdown("**API**")
-    st.markdown(f"<p style='color:#0099D8; font-size:0.75rem; word-break:break-all;'>{API_BASE}</p>", unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("**Épica E4** — Instructor Dashboard")
-    st.markdown("Sprint 2 · En progreso")
-
 
 # ── Página: Documentos ────────────────────────────────────────────────────────
 
@@ -362,6 +400,35 @@ if pagina == "Documentos":
             else:
                 st.error(f"Error: {resultado.get('detail', resultado)}")
 
+    st.markdown("---")
+
+    # Búsqueda directa en ChromaDB
+    st.markdown("---")
+    st.markdown("**Buscar en contenido de documentos (ChromaDB)**")
+    col_search, col_btn = st.columns([4, 1])
+    query_chroma = col_search.text_input(
+        "",
+        placeholder="Ej: errores ortograficos, fechas incorrectas...",
+        label_visibility="collapsed",
+        key="chroma_search"
+    )
+    if col_btn.button("Buscar"):
+        if query_chroma.strip():
+            with st.spinner("Buscando en ChromaDB..."):
+                resultados = search_chromadb(query_chroma)
+            if isinstance(resultados, str):
+                st.error(resultados)
+            elif not resultados:
+                st.info("No se encontraron resultados.")
+            else:
+                for i, doc in enumerate(resultados):
+                    source = doc.metadata.get("source", "Desconocido")
+                    st.markdown(f"""
+                    <div class="doc-card">
+                        <div class="doc-title">Fragmento {i+1} — {source}</div>
+                        <div class="doc-meta" style="color:#333; margin-top:0.4rem;">{doc.page_content[:400]}...</div>
+                    </div>
+                    """, unsafe_allow_html=True)
     st.markdown("---")
 
     # Lista de documentos

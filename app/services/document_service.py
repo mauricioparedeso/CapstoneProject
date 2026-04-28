@@ -7,9 +7,9 @@ Cubre:
   - US3: Persistir registro y metadatos
   - US4: Recuperar un registro por ID
   - US5: Listar todos los registros
+  + Puente E1→E2: indexar en ChromaDB tras el upload
 """
 import uuid
-import os
 from pathlib import Path
 
 from fastapi import UploadFile, HTTPException
@@ -25,8 +25,8 @@ ALLOWED_CONTENT_TYPES = {
     "text/plain": "txt",
 }
 
-# Directorio de almacenamiento
-STORAGE_DIR = Path("app/chroma_data")
+# Directorio de almacenamiento — separado de chroma_data
+STORAGE_DIR = Path("app/storage")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -46,7 +46,6 @@ def validate_file(file: UploadFile) -> str:
     ext = _get_extension(file.filename or "")
     content_type = file.content_type or ""
 
-    # Validar por extensión
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -56,7 +55,6 @@ def validate_file(file: UploadFile) -> str:
             ),
         )
 
-    # Validar content-type (segunda línea de defensa)
     if content_type and content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -68,11 +66,12 @@ def validate_file(file: UploadFile) -> str:
     return ext
 
 
-# ── US1 + US3: Upload y persistencia ────────────────────────────────────────
+# ── US1 + US3 + Puente E1→E2 ─────────────────────────────────────────────────
 
 async def upload_document(file: UploadFile, db: Session) -> Document:
     """
-    Lee el archivo, lo guarda en disco y crea el registro en BD.
+    Lee el archivo, lo guarda en disco, crea el registro en BD
+    e indexa el contenido en ChromaDB para que E3 pueda consultarlo.
 
     Returns:
         Document: el registro recién creado con su ID único.
@@ -84,12 +83,12 @@ async def upload_document(file: UploadFile, db: Session) -> Document:
     content = await file.read()
     file_size = len(content)
 
-    # Generar nombre único para el archivo en disco (evita colisiones)
+    # Generar nombre único para el archivo en disco
     doc_id = str(uuid.uuid4())
     stored_filename = f"{doc_id}.{ext}"
     storage_path = STORAGE_DIR / stored_filename
 
-    # Guardar en disco (US1)
+    # US1 — Guardar archivo físico en app/storage/
     storage_path.write_bytes(content)
 
     # US3 — Crear registro en BD
@@ -104,6 +103,19 @@ async def upload_document(file: UploadFile, db: Session) -> Document:
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    # Puente E1→E2 — Indexar en ChromaDB
+    # Se hace después del commit para no perder el registro si la indexación falla
+    try:
+        from app.services.indexing_service import index_document
+        index_document(
+            storage_path=str(storage_path),
+            file_format=ext,
+            original_filename=doc.original_filename,
+        )
+    except Exception as e:
+        # Si falla la indexación, el archivo igual queda guardado en E1
+        print(f"[indexing] Advertencia: no se pudo indexar '{doc.original_filename}': {e}")
 
     return doc
 
