@@ -53,7 +53,7 @@ PLANNER_PROMPT = SystemMessage(content=(
     "Cada tarea es una petición atómica del usuario.\n"
     "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n\n"
     "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].\n"
-    "Usa como intención 'obsolescence' o 'outdated content' si la tarea es sobre detectar información que ya no es válida o relevante. Usa 'detect incorrect info' para detectar datos que son claramente erróneos, como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.\n"
+   "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' para detectar datos erróneos como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.\n"
     "Si hay 2 tareas con la misma intención, combínalas en una sola tarea con un mensaje que incluya ambas peticiones, para optimizar el uso de herramientas.\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:\n"
     ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}\n'
@@ -332,7 +332,7 @@ def consultar_knowledge_base(query: str):
             pass
 
         if intention == "detect redundancy":
-            hallazgos.append("check_redundancy() aún no implementada.")
+            hallazgos.append(check_redundancy(message))
 
         if intention == "detect incorrect info":
             hallazgos.append(detectar_fechas_invalidas(message))
@@ -345,7 +345,7 @@ def consultar_knowledge_base(query: str):
             hallazgos.append("check_obsolescence() aún no implementada.")
 
         if intention == "detect outdated content":
-            hallazgos.append("check_outdated_content() aún no implementada.")
+            hallazgos.append(check_outdated_content(message))
 
         # Búsqueda normal de contenido
         docs = vector_store.similarity_search(query, k=3)
@@ -552,7 +552,38 @@ def detectar_fechas_invalidas(query: str):
     
 def check_redundancy(query: str):
     """Detecta información redundante en la knowledge base."""
-    return "Función de detección de redundancia aún no implementada."
+    try:
+        docs = vector_store.similarity_search(query, k=20)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar."
+
+        # Preparar contexto para el LLM
+        contexto = "\n\n".join([
+            f"[Fuente: {d.metadata.get('source', 'desconocido')}]\n{d.page_content}"
+            for d in docs
+        ])
+
+        response = llm.invoke([
+            SystemMessage(content=(
+                "Eres un detector de redundancias en documentos académicos.\n"
+                "Se te darán fragmentos de distintos documentos.\n"
+                "Identifica fragmentos que contengan información igual o muy similar.\n"
+                "REGLAS:\n"
+                "- Solo reporta redundancias reales, no coincidencias temáticas generales\n"
+                "- Indica la fuente de cada fragmento redundante\n"
+                "- Sé conciso\n"
+                "FORMATO:\n"
+                "[{\"fuente_1\": \"str\", \"fuente_2\": \"str\", \"descripcion\": \"str\"}]"
+            )),
+            SystemMessage(content=f"Fragmentos a analizar:\n{contexto}")
+        ])
+
+        return response.content
+
+    except Exception as e:
+        return f"Error técnico en detector de redundancias: {str(e)}"
+
 
 def check_conflicts(query: str):
     """Detecta información conflictiva o contradictoria en la knowledge base."""
@@ -563,8 +594,70 @@ def check_obsolescence(query: str):
     return "Función de detección de obsolescencia aún no implementada."
 
 def check_outdated_content(query: str):
-    """Detecta contenido desactualizado que podría inducir a error en la knowledge base."""
-    return "Función de detección de contenido desactualizado aún no implementada."
+    """Detecta contenido con fechas pasadas (más de 1 año) en la knowledge base."""
+    try:
+        docs = vector_store.similarity_search(query, k=20)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar."
+
+        pattern_dmy = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+        pattern_ymd = re.compile(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b")
+        pattern_year = re.compile(r"\b(20\d{2})\b")
+
+        umbral = datetime.now().replace(year=datetime.now().year - 1)
+        hallazgos = []
+
+        for d in docs:
+            source = d.metadata.get("source", "desconocido")
+            text = d.page_content
+
+            for match in pattern_dmy.finditer(text):
+                day, month, year = map(int, match.groups())
+                try:
+                    fecha = datetime(year, month, day)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  fecha_detectada: {match.group(0)}\n"
+                            f"  problema: fecha desactualizada (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+            for match in pattern_ymd.finditer(text):
+                year, month, day = map(int, match.groups())
+                try:
+                    fecha = datetime(year, month, day)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  fecha_detectada: {match.group(0)}\n"
+                            f"  problema: fecha desactualizada (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+            for match in pattern_year.finditer(text):
+                year = int(match.group(1))
+                try:
+                    fecha = datetime(year, 1, 1)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  año_detectado: {match.group(0)}\n"
+                            f"  problema: año desactualizado (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+        if not hallazgos:
+            return "No se encontró contenido desactualizado en los fragmentos analizados."
+
+        return "\n\n".join(hallazgos[:15])
+
+    except Exception as e:
+        return f"Error técnico en detector de contenido desactualizado: {str(e)}"
 
 def check_general_analysis(query: str):
     """Realiza un análisis general del estado de la knowledge base respecto a una query."""
