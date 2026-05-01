@@ -43,8 +43,11 @@ SYSTEM_PROMPT = SystemMessage(
 
 PROMPT_NODE_PROMPT = SystemMessage(content=(
     "Analiza el mensaje del usuario y decide si necesita herramientas externas para ser respondido.\n"
-    "Analiza el archivo memory_log.json para ver si preguntas similares fueron respondidas antes. Si el mensaje es similar a uno pasado, responde con needs_tools: false y resuelve con tu conocimiento. Si es una pregunta nueva, responde con needs_tools: true para que el planner genere tareas.\n"
-    "Responde ÚNICAMENTE con un JSON con este formato, sin texto adicional:\n"
+    "Responde needs_tools: true si la pregunta requiere consultar documentos, archivos, o la knowledge base.\n"
+    "Responde needs_tools: false SOLO si la pregunta puede responderse con conocimiento general sin consultar ningún documento.\n"
+    "Ejemplos de needs_tools: true: '¿qué documentos hay?', 'resume los documentos', 'detecta errores', 'qué dice el archivo X'.\n"
+    "Ejemplos de needs_tools: false: '¿cuánto es 2+2?', '¿qué es Python?', 'explícame qué es un LLM'.\n"
+    "Responde ÚNICAMENTE con un JSON, sin texto adicional:\n"
     '{"needs_tools": true} o {"needs_tools": false}\n'
 ))
 
@@ -676,23 +679,29 @@ def writer_node(state: State) -> State:
     return {"messages": [response]}
 
 def memory_node(state: State) -> State:
-    """Usa el registro de memoria para responder. Si el mensaje es nuevo, redirige al planner."""
+    """Enriquece el contexto con memoria histórica. No toma decisiones de routing."""
 
-    memory_data = get_memory_data()  # función para cargar y formatear el memory_log.json
-    response = llm.invoke([MEMORY_PROMPT] + memory_data + state["messages"])
+    memory_data = get_memory_data()
 
-    try:
-        parsed = json.loads(response.content)
-        need_tools  = "yes" if parsed.get("needs_tools") else "no"
-    except Exception:
-        need_tools = "no"  # si falla el parse, responde directo
+    # Si hay memoria relevante, la inyectamos como contexto adicional
+    if memory_data:
+        context_msg = SystemMessage(
+            content=(
+                "Contexto de interacciones previas (úsalo como referencia, "
+                "no como respuesta definitiva):\n"
+                + "\n".join([m.content for m in memory_data if hasattr(m, "content")])
+            )
+        )
+        state["messages"] = [context_msg] + list(state["messages"])
 
     state["actual_node"] = "memory_node"
     save_memory(state)
+
+    # Siempre pasa al writer_node — el routing ya lo decidió prompt_node
     return {
-        "messages":            [response],
-        "conditional_message": need_tools,
-        "iterations":          state.get("iterations", 0) + 1,
+        "messages": state["messages"],
+        "conditional_message": "no",
+        "iterations": state.get("iterations", 0) + 1,
     }
 
 def query_node(state: State) -> State:
@@ -750,8 +759,8 @@ def query_node(state: State) -> State:
 def after_prompt(state: State) -> Literal["planner_node", "memory_node"]:
     return "planner_node" if state["conditional_message"] == "yes" else "memory_node"
 
-def after_memory(state: State) -> Literal["planner_node", "writer_node"]:
-    return "planner_node" if state["conditional_message"] == "yes" else "writer_node"
+def after_memory(state: State) -> Literal["writer_node"]:
+    return "writer_node"
 
 def after_executor(state: State) -> Literal["tool_executor_node", "query_node"]:
     return "tool_executor_node" if state["conditional_message"] == "pending" else "query_node"
