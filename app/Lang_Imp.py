@@ -1,4 +1,4 @@
-with open(".gitignore/API_KEY.txt", "r") as f:
+with open("API_KEY.txt", "r") as f:
     API_KEYS = [line.strip() for line in f.readlines()]
     API_KEY = API_KEYS[1]
 
@@ -43,11 +43,8 @@ SYSTEM_PROMPT = SystemMessage(
 
 PROMPT_NODE_PROMPT = SystemMessage(content=(
     "Analiza el mensaje del usuario y decide si necesita herramientas externas para ser respondido.\n"
-    "Responde needs_tools: true si la pregunta requiere consultar documentos, archivos, o la knowledge base.\n"
-    "Responde needs_tools: false SOLO si la pregunta puede responderse con conocimiento general sin consultar ningún documento.\n"
-    "Ejemplos de needs_tools: true: '¿qué documentos hay?', 'resume los documentos', 'detecta errores', 'qué dice el archivo X'.\n"
-    "Ejemplos de needs_tools: false: '¿cuánto es 2+2?', '¿qué es Python?', 'explícame qué es un LLM'.\n"
-    "Responde ÚNICAMENTE con un JSON, sin texto adicional:\n"
+    "Analiza el archivo memory_log.json para ver si preguntas similares fueron respondidas antes. Si el mensaje es similar a uno pasado, responde con needs_tools: false y resuelve con tu conocimiento. Si es una pregunta nueva, responde con needs_tools: true para que el planner genere tareas.\n"
+    "Responde ÚNICAMENTE con un JSON con este formato, sin texto adicional:\n"
     '{"needs_tools": true} o {"needs_tools": false}\n'
 ))
 
@@ -77,12 +74,24 @@ WRITER_PROMPT = SystemMessage(content=(
 ))
 
 MEMORY_PROMPT = SystemMessage(content=(
-    "Tu tarea es tener en cuenta el archivo memory_log.json, que contiene un historial de interacciones pasadas. Úsalo para evitar repetir información o cometer los mismos errores. No es necesario que cites el memory_log, pero úsalo como referencia para mejorar tus respuestas."
-    "Si ves que el usuario hace una pregunta similar a una interacción pasada, intenta dar una respuesta diferente o más completa, aprendiendo de lo que se hizo antes."
-    "En caso de que sea una pregunta nueva, envía como need_tools: true para que el planner genere tareas normalmente. Si es una pregunta repetida, responde con need_tools: false y resuelve con tu conocimiento, pero teniendo en cuenta lo que se hizo antes."
-    "Si consideras que es necesaria una tool, envía como message el motivo por el cual crees que la tool es necesaria, para que el planner pueda tomarlo en cuenta al generar las tareas."
-    "Responde ÚNICAMENTE con un JSON con este formato, sin texto adicional:\n"
-    '{"needs_tools": [true,false], "message": "str"}\n'
+    "Tu tarea es analizar el archivo memory_log.json que contiene un historial de interacciones pasadas.\n"
+    "Analiza el mensaje del usuario y descomponlo en tareas.\n"
+    "Cada tarea es una petición atómica del usuario.\n"
+    "ESTRATEGIA:\n"
+    "1. Si la pregunta o tareas PUEDEN RESOLVERSE con memoria y conocimiento propio:\n"
+    "   - Resuelve las tareas tú mismo\n"
+    "   - Crea un JSON array con:\n"
+    ' {"task_name": "str", "status": [done], "task_message": "str", "intention": "str", "used_tool": [memory]}\n'
+    "2. Si la pregunta o tareas REQUIEREN TOOLS externas:\n"
+    "   - Identifica cuáles tareas necesitan tools\n"
+    "   - Crea un nuevo mensaje, basado en el mensaje original, pero únicamente listando estas tareas}\n"
+    "   - Si NO todas requieren tools, devuelve solo las que sí las necesitan\n\n"
+    '   - Crea un JSON array con: {"memory_message": "str"}'
+    "REGLAS:\n"
+    "- Usa memory_log para contexto, pero NO cites explícitamente a menos que la tarea lo requiera\n"
+    "- Si encuentras respuestas similares en el log, aprende de ellas\n"
+    "- Responde ÚNICAMENTE con la únion de los JSON de los 2 pasos, sin texto adicional\n"
+
 ))
 
 QUERY_PROMPT = SystemMessage(content=(
@@ -115,7 +124,7 @@ SPELLING_PROMPT = SystemMessage(content=(
     "Filtra errores ortográficos reales en textos.\n\n"
 
     "REGLAS:\n"
-    "- Solo incluye palabras claramente incorrectas en español o inglés\n"
+    "- Solo incluye palabras incorrectas o parcialmente incorrectas en español o inglés\n"
     "- Elimina:\n"
     "  * nombres propios\n"
     "  * siglas\n"
@@ -129,11 +138,11 @@ SPELLING_PROMPT = SystemMessage(content=(
     "FORMATO OBLIGATORIO:\n"
     "Devuelve JSON válido:\n"
     "[{\"source\": \"str\", \"errors\": [\"str\"]}]\n\n"
+    "Añadir al final, un Json con el número total de errores detectados antes de limpieza, para referencia:\n"
+    "{\"total_errors\": \"int\"}\n\n"
 
     "REGLAS DE SALIDA:\n"
-    "- Si un source queda sin errores, elimínalo\n"
-    "- Máximo 15 errores por source\n"
-    "- Si no hay errores, responde con los 40 errores mas relevantes, usando el mismo formato"
+    "- Enviarás una lista de las 15 palabras más relevantes, junto con su fuente"
 ))
 
 
@@ -274,6 +283,10 @@ def get_memory_data() -> list[SystemMessage]:
 
     return messages
 
+def del_memory_data():
+    if os.path.exists(MEMORY_FILE) and os.path.getsize(MEMORY_FILE) > 0:
+        with open(MEMORY_FILE, 'w') as f:
+            pass
 
 
 
@@ -314,21 +327,25 @@ def consultar_knowledge_base(query: str):
             
             nombres = list(set([m.get("source") for m in data["metadatas"]]))
             return f"Archivos indexados en la base de datos: {nombres}"
+        
         if intention == "general analysis":
             pass
+
         if intention == "detect redundancy":
-            pass
+            hallazgos.append("check_redundancy() aún no implementada.")
+
         if intention == "detect incorrect info":
             hallazgos.append(detectar_fechas_invalidas(message))
             hallazgos.append(detectar_errores_ortograficos(message))
 
-
         if intention == "detect conflicts":
-            pass
+            hallazgos.append("check_conflicts() aún no implementada.")
+
         if intention == "detect obsolescence":
-            pass
+            hallazgos.append("check_obsolescence() aún no implementada.")
+
         if intention == "detect outdated content":
-            pass
+            hallazgos.append("check_outdated_content() aún no implementada.")
 
         # Búsqueda normal de contenido
         docs = vector_store.similarity_search(query, k=3)
@@ -336,10 +353,22 @@ def consultar_knowledge_base(query: str):
             return "No encontré información específica sobre eso en los documentos."
         
 
-        return f"\n <br> Se encontraron los siguientes hallazgos: {', '.join(hallazgos)}"
+        return f"\n <br> Se encontraron los siguientes hallazgos: {' '.join(hallazgos)}"
     except Exception as e:
         return f"Error técnico: {str(e)}"
-
+    
+@tool
+def generar_sugerencias(query: str):
+    """A partir de RAG, genera una sugerencia para abordar los problemas encontrados."""
+    return "Herramienta de generación de sugerencias aún no implementada."
+    
+@tool
+def memory_tool(query: str): #Reemplaza al memory node
+    """Herramienta para acceder a la memoria de interacciones pasadas."""
+    # Esta función podría ser llamada por el planner si el prompt_node o memory_node indican que es necesario usar memoria.
+    # El query podría incluir información sobre qué tipo de información se busca en la memoria (ej: "¿He respondido algo similar antes?").
+    # La función podría analizar el memory_log.json y devolver información relevante al LLM para que la tenga en cuenta al generar la respuesta.
+    return "Función de memoria aún no implementada."
 
 
 
@@ -410,12 +439,13 @@ def detectar_errores_ortograficos(query: str):
         ]
 
         if not cleaned_input:
-            return []
+            return "No se encontraron errores ortográficos en los fragmentos analizados."
 
         # 3. LLAMADA AL LLM (solo para refinar)
         response = llm.invoke([
             SPELLING_PROMPT,
-            SystemMessage(content=f"Fragmentos a revisar:\n{cleaned_input}")
+            SystemMessage(content=f"Fragmentos a revisar:\n{cleaned_input}"),
+            SystemMessage(content=f"Número total de errores detectados antes de limpieza: {sum(len(e['errors']) for e in cleaned_input)}")
         ])
 
         # 4. VALIDACIÓN DE SALIDA
@@ -439,17 +469,28 @@ def detectar_errores_ortograficos(query: str):
 
                 seen_sources.add(source)
 
-            return final
+            # Convertir a string formateado
+            if not final:
+                return "No se encontraron errores ortográficos reales después de filtrado."
+            
+            resultado = "\n".join([
+                f"- fuente: {item['source']}\n  errores: {', '.join(item['errors'])}"
+                for item in final
+            ])
+            return resultado
 
         except Exception:
-            # fallback seguro si el LLM falla
-            return cleaned_input
+            # fallback seguro si el LLM falla - formatear cleaned_input como string
+            if not cleaned_input:
+                return "Error al procesar errores ortográficos."
+            resultado = "\n".join([
+                f"- fuente: {item['source']}\n  errores: {', '.join(item['errors'])}"
+                for item in cleaned_input
+            ])
+            return resultado
 
     except Exception as e:
         return f"Error técnico en detector ortográfico: {str(e)}"
-
-
-
 
 def detectar_fechas_invalidas(query: str):
     """Detecta fechas numéricas inválidas en fragmentos relevantes de la knowledge base."""
@@ -509,7 +550,25 @@ def detectar_fechas_invalidas(query: str):
     except Exception as e:
         return f"Error técnico en detector de fechas: {str(e)}"
     
+def check_redundancy(query: str):
+    """Detecta información redundante en la knowledge base."""
+    return "Función de detección de redundancia aún no implementada."
 
+def check_conflicts(query: str):
+    """Detecta información conflictiva o contradictoria en la knowledge base."""
+    return "Función de detección de conflictos aún no implementada."
+
+def check_obsolescence(query: str):
+    """Detecta información obsoleta o que ya no es relevante en la knowledge base."""
+    return "Función de detección de obsolescencia aún no implementada."
+
+def check_outdated_content(query: str):
+    """Detecta contenido desactualizado que podría inducir a error en la knowledge base."""
+    return "Función de detección de contenido desactualizado aún no implementada."
+
+def check_general_analysis(query: str):
+    """Realiza un análisis general del estado de la knowledge base respecto a una query."""
+    return "Función de análisis general aún no implementada."
 
 
 
@@ -553,6 +612,9 @@ graph.add_node("tool_node", tool_node)
 def prompt_node(state: State) -> State:
     """Decide si el mensaje necesita tools o puede responderse con memoria."""
     memory_data = get_memory_data()
+    del_memory_data()  # opcional, para no saturar el prompt con memoria en cada iteración
+
+
     response = llm.invoke([PROMPT_NODE_PROMPT] + memory_data + [TOOL_SET] + state["messages"])
 
     try:
@@ -647,62 +709,102 @@ def tool_executor_node(state: State) -> State:
         "iterations":          state.get("iterations", 0) + 1,
     }
 
-
-
+def suggest_executor_node(state: State) -> State:
+    """Toma la primera task done, ejecuta su suggest y actualiza su estado."""
+    pass
 
 def writer_node(state: State) -> State:
-    """Genera la respuesta final iterando todas las tasks."""
+    """Genera la respuesta final iterando todas las tasks y sus sugerencias."""
 
     tasks = state.get("tasks", [])
     
+    # Obtener solo el mensaje original del usuario (el primero)
+    user_message = state["messages"][0] if state["messages"] else "Sin mensaje"
+    user_msg_content = user_message.content if hasattr(user_message, 'content') else str(user_message)
+    
     if not tasks:
-        # fallback cuando no hay planner
-        response = llm.invoke([WRITER_PROMPT] + state["messages"])
-        print(f"Uso de tokens en writer: {response.response_metadata['token_usage']}")
+        # fallback cuando no hay tareas
+        response = llm.invoke([
+            WRITER_PROMPT,
+            SystemMessage(content=f"Mensaje del usuario: {user_msg_content}")
+        ])
+        print(f"Uso de tokens en writer: {response.response_metadata.get('token_usage', {})}")
         return {"messages": [response]}
 
     resumen = "\n".join([
         f"- [{t['status'].upper()}] {t['task_name']}: {t['message'] or t['task_message']}"
-        for t in state["tasks"]
+        for t in tasks
     ])
 
     writer_context = SystemMessage(content=(
         f"{WRITER_PROMPT.content}\n\n"
+        f"Mensaje original del usuario: {user_msg_content}\n\n"
         f"Lista de tareas ejecutadas:\n{resumen}"
     ))
    
-    response = llm.invoke([writer_context] + state["messages"])
-    print(f"Uso de tokens en writer: {response.response_metadata['token_usage']}")
+    response = llm.invoke([writer_context])
+    
+    if not response.content or response.content.strip() == "":
+        print("[WARNING] Writer retornó respuesta vacía, usando fallback")
+        return {"messages": [SystemMessage(content=f"Respuesta: {resumen}")]}
+    
+    print(f"Uso de tokens en writer: {response.response_metadata.get('token_usage', {})}")
     state["actual_node"] = "writer_node"
     save_memory(state)
 
     return {"messages": [response]}
 
 def memory_node(state: State) -> State:
-    """Enriquece el contexto con memoria histórica. No toma decisiones de routing."""
+    """Decide si puede resolver con memoria o redirige al planner."""
 
     memory_data = get_memory_data()
+    response = llm.invoke([MEMORY_PROMPT] + memory_data + state["messages"])
 
-    # Si hay memoria relevante, la inyectamos como contexto adicional
-    if memory_data:
-        context_msg = SystemMessage(
-            content=(
-                "Contexto de interacciones previas (úsalo como referencia, "
-                "no como respuesta definitiva):\n"
-                + "\n".join([m.content for m in memory_data if hasattr(m, "content")])
-            )
-        )
-        state["messages"] = [context_msg] + list(state["messages"])
-
-    state["actual_node"] = "memory_node"
-    save_memory(state)
-
-    # Siempre pasa al writer_node — el routing ya lo decidió prompt_node
-    return {
-        "messages": state["messages"],
-        "conditional_message": "no",
-        "iterations": state.get("iterations", 0) + 1,
-    }
+    try:
+        parsed = json.loads(response.content)
+        can_answer = parsed.get("can_answer_from_memory", False)
+        
+        if can_answer:
+            # Puede responder con memoria - crea una tarea completada
+            user_msg = state["messages"][0].content if hasattr(state["messages"][0], 'content') else str(state["messages"][0])
+            
+            tasks: list[Task] = [{
+                "task_name":    "respuesta_desde_memoria",
+                "task_message": user_msg,
+                "intention":    "from_memory",
+                "status":       "completed",
+                "message":      parsed.get("reason", "Respondido desde memoria"),
+                "used_tool":    "none",
+            }]
+            
+            state["actual_node"] = "memory_node"
+            save_memory(state)
+            return {
+                "messages":            [response],
+                "tasks":               tasks,
+                "conditional_message": "resolved_by_memory",
+                "iterations":          state.get("iterations", 0) + 1,
+            }
+        else:
+            # Necesita tools - redirige al planner
+            state["actual_node"] = "memory_node"
+            save_memory(state)
+            return {
+                "messages":            [response],
+                "conditional_message": "yes",
+                "iterations":          state.get("iterations", 0) + 1,
+            }
+    
+    except Exception as e:
+        print(f"[ERROR] memory_node parse falló: {e}")
+        # Fallback: redirige al planner
+        state["actual_node"] = "memory_node"
+        save_memory(state)
+        return {
+            "messages":            [response],
+            "conditional_message": "yes",
+            "iterations":          state.get("iterations", 0) + 1,
+        }
 
 def query_node(state: State) -> State:
     tasks = state.get("tasks", [])
@@ -759,8 +861,16 @@ def query_node(state: State) -> State:
 def after_prompt(state: State) -> Literal["planner_node", "memory_node"]:
     return "planner_node" if state["conditional_message"] == "yes" else "memory_node"
 
-def after_memory(state: State) -> Literal["writer_node"]:
-    return "writer_node"
+def after_memory(state: State) -> Literal["planner_node", "writer_node"]:
+    # Si se resolvió con memoria, va directamente a writer
+    if state["conditional_message"] == "resolved_by_memory":
+        return "writer_node"
+    # Si necesita tools, va al planner
+    elif state["conditional_message"] == "yes":
+        return "planner_node"
+    # Si no puede resolver, intenta con planner
+    else:
+        return "planner_node"
 
 def after_executor(state: State) -> Literal["tool_executor_node", "query_node"]:
     return "tool_executor_node" if state["conditional_message"] == "pending" else "query_node"

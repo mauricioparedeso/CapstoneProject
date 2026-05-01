@@ -1,3 +1,21 @@
+#wsl install Ubuntu -> Config Docker
+#abrir Ubuntu -> Docker run hello-world
+
+#instalar wsl en vscode
+
+#Montar en documents el git pull
+#cd /mnt/c/Users/olakh/Documents/CapstoneProject
+
+#Docker compose up --build
+
+#Si ya está construído
+#Docker compose up -d
+
+#docker compose logs -f
+
+#Docker compose stop
+
+
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
