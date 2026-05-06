@@ -526,9 +526,13 @@ elif pagina == "Consultar Agente":
 
     col_send, col_clear = st.columns([1, 5])
     enviar = col_send.button("Enviar")
+
     if col_clear.button("Limpiar chat"):
         st.session_state.chat_history = []
+        with open("app/memory_log.json", "w") as f:
+            json.dump([], f)
         st.rerun()
+        
 
     if enviar and pregunta.strip():
         st.session_state.chat_history.append({"role": "user", "content": pregunta})
