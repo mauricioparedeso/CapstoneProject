@@ -1,6 +1,6 @@
 with open("API_KEY.txt", "r") as f:
     API_KEYS = [line.strip() for line in f.readlines()]
-    API_KEY = API_KEYS[1]
+    API_KEY = API_KEYS[0]
 
 # git reset --soft HEAD~1
 
@@ -51,9 +51,9 @@ PROMPT_NODE_PROMPT = SystemMessage(content=(
 PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.\n"
     "Cada tarea es una petición atómica del usuario.\n"
-    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt. Si una tarea no necesita herramienta, márcala con used_tool: 'none'.\n\n"
+    "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt.\n\n"
     "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].\n"
-    "Usa como intención 'obsolescence' o 'outdated content' si la tarea es sobre detectar información que ya no es válida o relevante. Usa 'detect incorrect info' para detectar datos que son claramente erróneos, como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.\n"
+   "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' para detectar datos erróneos como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.\n"
     "Si hay 2 tareas con la misma intención, combínalas en una sola tarea con un mensaje que incluya ambas peticiones, para optimizar el uso de herramientas.\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:\n"
     ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}\n'
@@ -73,26 +73,46 @@ WRITER_PROMPT = SystemMessage(content=(
     "Sé conciso y directo."
 ))
 
-MEMORY_PROMPT = SystemMessage(content=(
-    "Tu tarea es analizar el archivo memory_log.json que contiene un historial de interacciones pasadas.\n"
-    "Analiza el mensaje del usuario y descomponlo en tareas.\n"
-    "Cada tarea es una petición atómica del usuario.\n"
-    "ESTRATEGIA:\n"
-    "1. Si la pregunta o tareas PUEDEN RESOLVERSE con memoria y conocimiento propio:\n"
-    "   - Resuelve las tareas tú mismo\n"
-    "   - Crea un JSON array con:\n"
-    ' {"task_name": "str", "status": [done], "task_message": "str", "intention": "str", "used_tool": [memory]}\n'
-    "2. Si la pregunta o tareas REQUIEREN TOOLS externas:\n"
-    "   - Identifica cuáles tareas necesitan tools\n"
-    "   - Crea un nuevo mensaje, basado en el mensaje original, pero únicamente listando estas tareas}\n"
-    "   - Si NO todas requieren tools, devuelve solo las que sí las necesitan\n\n"
-    '   - Crea un JSON array con: {"memory_message": "str"}'
-    "REGLAS:\n"
-    "- Usa memory_log para contexto, pero NO cites explícitamente a menos que la tarea lo requiera\n"
-    "- Si encuentras respuestas similares en el log, aprende de ellas\n"
-    "- Responde ÚNICAMENTE con la únion de los JSON de los 2 pasos, sin texto adicional\n"
+MEMORY_PROMPT = SystemMessage(content=( 
+    "Descompón el mensaje del usuario en tareas atómicas.\n\n" 
+    "PARA CADA TAREA:\n" "Busca en memory_log.json y determina si puede resolverse con memoria.\n\n" 
+    "CRITERIO ESTRICTO DE MEMORIA:\n" "SOLO marca una tarea como 'done' si:\n" 
+    "- Existe una tarea en memory_log con el MISMO objetivo específico\n" 
+    "- Y puedes COPIAR una respuesta REAL, concreta y completa desde el log\n" 
+    "- Y esa respuesta contiene DATOS ESPECÍFICOS (NO placeholders como 'archivo1', 'example', 'test', etc.)\n" 
+    "- Y corresponde al mismo contexto (misma consulta o mismos datos relevantes)\n\n" 
+    "SI ocurre cualquiera de estos casos:\n" 
+    "- La coincidencia es solo por keywords o intención general\n" 
+    "- La respuesta es genérica, incompleta o ambigua\n" 
+    "- No puedes copiar exactamente una respuesta válida del log\n\n" 
+    "→ ENTONCES: status = 'pending'\n\n" 
+    "REGLA CRÍTICA:\n" 
+    "NUNCA inventes datos para tareas 'done'.\n" 
+    "SI no puedes reutilizar memoria real → la tarea es 'pending'.\n\n" 
+    "FORMATO POR TAREA:\n"
+    "Si está en memoria:\n" 
+    '{"task_name": "str", "status": "done", "message": "COPIA EXACTA DEL LOG", "intention": "str", "used_tool": "memory"}\n\n' 
+    "Si NO está en memoria:\n" 
+    '{"task_name": "str", "status": "pending", "message": "", "intention": "str", "used_tool": "none | get_weather | consultar_knowledge_base"}\n\n' 
+    "INTENCIONES PERMITIDAS:\n" "weather, file listing, general analysis, detect redundancy, detect incorrect info, detect conflicts, detect obsolescence, detect outdated content\n\n" 
+    "MENSAJE PARA PLANNER:\n" 
+    "Construye un string que contenga SOLO los nombres de las tareas con status='pending'.\n" 
+    "Formato:\n" 
+    "message_planner: tarea1, tarea2, tarea3\n\n" 
+    "SALIDA ESTRICTA (OBLIGATORIA):\n" 
+    "- Primero: un JSON array válido con TODAS las tareas\n" 
+    "- Luego: un carácter ';'\n" 
+    "- Luego: el string del mensaje para planner\n\n" 
+    "PROHIBIDO:\n" 
+    "- Markdown\n" 
+    "- Bloques de código\n" 
+    "- Texto adicional\n" 
+    "- Explicaciones\n\n" 
+    "EJEMPLO DE SALIDA CORRECTA:\n" 
+    '[{"task_name":"A","status":"done","message":"respuesta real","intention":"file listing","used_tool":"memory"},' 
+    '{"task_name":"B","status":"pending","message":"","intention":"detect incorrect info","used_tool":"consultar_knowledge_base"}];' 'mensaje_planner: B\n' ))
 
-))
+
 
 QUERY_PROMPT = SystemMessage(content=(
     "Eres un generador de queries para recuperación semántica en una base vectorial.\n"
@@ -200,6 +220,7 @@ class State(TypedDict):
     conditional_message: str  # Para trackear el mensaje que decide a qué nodo ir
     iterations: int
     tasks: list[Task]  # Para trackear tareas asincronas
+    memory_tasks: list[Task]  # Para trackear tareas resueltas con memoria
 
 graph = StateGraph(State)
 #====================================================================================
@@ -250,6 +271,7 @@ def save_memory(state: State):
         "message": normalize_text(state.get("messages", [])[-1].content if state.get("messages") else ""),
         "tasks": (state.get("tasks", []) if state.get("actual_node", "unknown") != "tool_executor_node" else []),
         "conditional_message": state.get("conditional_message"),
+        "memory_tasks": state.get("memory_tasks", []),
     }
 
     data.append(normalize_safe(entry))
@@ -260,28 +282,24 @@ def save_memory(state: State):
 def get_memory_data() -> list[SystemMessage]:
     if not os.path.exists(MEMORY_FILE):
         return []
-    
+
     try:
         with open(MEMORY_FILE, "r") as f:
-            content = f.read().strip()
-            if content == "":
-                return []
-            data = json.loads(content)
-    except json.JSONDecodeError:
-        print("[WARNING] JSON corrupto, no se cargará memoria")
+            data = json.load(f)
+    except:
         return []
 
-    # Convertimos cada entrada del log en un SystemMessage para el LLM
-    messages = []
-    for entry in data[-10:]:  # limitamos a las últimas 10 entradas para no saturar
-        msg_content = (
-            f"En el pasado, en el nodo '{entry['node']}' con iteración {entry['iterations']}, se generó el mensaje: '{entry['message']}'. "
-            f"Las tareas asociadas fueron: {entry.get('tasks', [])}. "
-            f"La decisión condicional fue: '{entry.get('conditional_message')}'."
-        )
-        messages.append(SystemMessage(content=msg_content))
+    for entry in reversed(data):
+        tasks = entry.get("tasks", [])
+        if tasks:
+            completed = [
+                t for t in tasks
+                if t.get("status") in ["done", "completed"]
+            ]
+            if completed:
+                return [SystemMessage(content=json.dumps(completed))]
 
-    return messages
+    return []
 
 def del_memory_data():
     if os.path.exists(MEMORY_FILE) and os.path.getsize(MEMORY_FILE) > 0:
@@ -332,7 +350,7 @@ def consultar_knowledge_base(query: str):
             pass
 
         if intention == "detect redundancy":
-            hallazgos.append("check_redundancy() aún no implementada.")
+            hallazgos.append(check_redundancy(message))
 
         if intention == "detect incorrect info":
             hallazgos.append(detectar_fechas_invalidas(message))
@@ -345,7 +363,7 @@ def consultar_knowledge_base(query: str):
             hallazgos.append("check_obsolescence() aún no implementada.")
 
         if intention == "detect outdated content":
-            hallazgos.append("check_outdated_content() aún no implementada.")
+            hallazgos.append(check_outdated_content(message))
 
         # Búsqueda normal de contenido
         docs = vector_store.similarity_search(query, k=3)
@@ -552,7 +570,38 @@ def detectar_fechas_invalidas(query: str):
     
 def check_redundancy(query: str):
     """Detecta información redundante en la knowledge base."""
-    return "Función de detección de redundancia aún no implementada."
+    try:
+        docs = vector_store.similarity_search(query, k=20)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar."
+
+        # Preparar contexto para el LLM
+        contexto = "\n\n".join([
+            f"[Fuente: {d.metadata.get('source', 'desconocido')}]\n{d.page_content}"
+            for d in docs
+        ])
+
+        response = llm.invoke([
+            SystemMessage(content=(
+                "Eres un detector de redundancias en documentos académicos.\n"
+                "Se te darán fragmentos de distintos documentos.\n"
+                "Identifica fragmentos que contengan información igual o muy similar.\n"
+                "REGLAS:\n"
+                "- Solo reporta redundancias reales, no coincidencias temáticas generales\n"
+                "- Indica la fuente de cada fragmento redundante\n"
+                "- Sé conciso\n"
+                "FORMATO:\n"
+                "[{\"fuente_1\": \"str\", \"fuente_2\": \"str\", \"descripcion\": \"str\"}]"
+            )),
+            SystemMessage(content=f"Fragmentos a analizar:\n{contexto}")
+        ])
+
+        return response.content
+
+    except Exception as e:
+        return f"Error técnico en detector de redundancias: {str(e)}"
+
 
 def check_conflicts(query: str):
     """Detecta información conflictiva o contradictoria en la knowledge base."""
@@ -563,8 +612,70 @@ def check_obsolescence(query: str):
     return "Función de detección de obsolescencia aún no implementada."
 
 def check_outdated_content(query: str):
-    """Detecta contenido desactualizado que podría inducir a error en la knowledge base."""
-    return "Función de detección de contenido desactualizado aún no implementada."
+    """Detecta contenido con fechas pasadas (más de 1 año) en la knowledge base."""
+    try:
+        docs = vector_store.similarity_search(query, k=20)
+
+        if not docs:
+            return "No encontré fragmentos relevantes para revisar."
+
+        pattern_dmy = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+        pattern_ymd = re.compile(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b")
+        pattern_year = re.compile(r"\b(20\d{2})\b")
+
+        umbral = datetime.now().replace(year=datetime.now().year - 1)
+        hallazgos = []
+
+        for d in docs:
+            source = d.metadata.get("source", "desconocido")
+            text = d.page_content
+
+            for match in pattern_dmy.finditer(text):
+                day, month, year = map(int, match.groups())
+                try:
+                    fecha = datetime(year, month, day)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  fecha_detectada: {match.group(0)}\n"
+                            f"  problema: fecha desactualizada (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+            for match in pattern_ymd.finditer(text):
+                year, month, day = map(int, match.groups())
+                try:
+                    fecha = datetime(year, month, day)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  fecha_detectada: {match.group(0)}\n"
+                            f"  problema: fecha desactualizada (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+            for match in pattern_year.finditer(text):
+                year = int(match.group(1))
+                try:
+                    fecha = datetime(year, 1, 1)
+                    if fecha < umbral:
+                        hallazgos.append(
+                            f"- fuente: {source}\n"
+                            f"  año_detectado: {match.group(0)}\n"
+                            f"  problema: año desactualizado (más de 1 año)"
+                        )
+                except ValueError:
+                    pass
+
+        if not hallazgos:
+            return "No se encontró contenido desactualizado en los fragmentos analizados."
+
+        return "\n\n".join(hallazgos[:15])
+
+    except Exception as e:
+        return f"Error técnico en detector de contenido desactualizado: {str(e)}"
 
 def check_general_analysis(query: str):
     """Realiza un análisis general del estado de la knowledge base respecto a una query."""
@@ -612,10 +723,8 @@ graph.add_node("tool_node", tool_node)
 def prompt_node(state: State) -> State:
     """Decide si el mensaje necesita tools o puede responderse con memoria."""
     memory_data = get_memory_data()
-    del_memory_data()  # opcional, para no saturar el prompt con memoria en cada iteración
-
-
     response = llm.invoke([PROMPT_NODE_PROMPT] + memory_data + [TOOL_SET] + state["messages"])
+    del_memory_data()
 
     try:
         parsed = json.loads(response.content)
@@ -647,7 +756,7 @@ def planner_node(state: State) -> State:
                 "intention":    t["intention"],
                 "status":       "pending",
                 "message":      "",
-                "used_tool":    t.get("used_tool", "none"),
+                "used_tool":    t["used_tool"],
             }
             for t in raw_tasks
         ]
@@ -664,7 +773,6 @@ def planner_node(state: State) -> State:
 
     state["actual_node"] = "planner_node"
     save_memory(state)
-
     return {
         "messages": [response],
         "tasks":    tasks,
@@ -715,7 +823,7 @@ def suggest_executor_node(state: State) -> State:
 
 def writer_node(state: State) -> State:
     """Genera la respuesta final iterando todas las tasks y sus sugerencias."""
-
+    
     tasks = state.get("tasks", [])
     
     # Obtener solo el mensaje original del usuario (el primero)
@@ -761,50 +869,36 @@ def memory_node(state: State) -> State:
     response = llm.invoke([MEMORY_PROMPT] + memory_data + state["messages"])
 
     try:
-        parsed = json.loads(response.content)
-        can_answer = parsed.get("can_answer_from_memory", False)
-        
-        if can_answer:
-            # Puede responder con memoria - crea una tarea completada
-            user_msg = state["messages"][0].content if hasattr(state["messages"][0], 'content') else str(state["messages"][0])
-            
-            tasks: list[Task] = [{
-                "task_name":    "respuesta_desde_memoria",
-                "task_message": user_msg,
-                "intention":    "from_memory",
-                "status":       "completed",
-                "message":      parsed.get("reason", "Respondido desde memoria"),
-                "used_tool":    "none",
-            }]
-            
-            state["actual_node"] = "memory_node"
-            save_memory(state)
-            return {
-                "messages":            [response],
-                "tasks":               tasks,
-                "conditional_message": "resolved_by_memory",
-                "iterations":          state.get("iterations", 0) + 1,
+        raw_tasks = json.loads(response.content.split(";")[0])  # Solo la parte del JSON, ignorando el mensaje para planner
+
+        tasks: list[Task] = [
+            {
+                "task_name":    t["task_name"],
+                "task_message": t["task_message"],
+                "intention":    t["intention"],
+                "status":       "pending",
+                "message":      "",
+                "used_tool":    t.get("used_tool", "none"),
             }
-        else:
-            # Necesita tools - redirige al planner
-            state["actual_node"] = "memory_node"
-            save_memory(state)
-            return {
-                "messages":            [response],
-                "conditional_message": "yes",
-                "iterations":          state.get("iterations", 0) + 1,
-            }
-    
+            for t in raw_tasks if "status" == "completed"
+        ]
+
     except Exception as e:
-        print(f"[ERROR] memory_node parse falló: {e}")
-        # Fallback: redirige al planner
-        state["actual_node"] = "memory_node"
-        save_memory(state)
-        return {
-            "messages":            [response],
-            "conditional_message": "yes",
-            "iterations":          state.get("iterations", 0) + 1,
-        }
+        print(f"[WARNING] Error al parsear memoria: {e}")
+        tasks = []
+    
+    state["actual_node"] = "memory_node"
+    save_memory(state)
+    
+    #Ahora quitamos el "mensaje_planner: " para quedarnos solo con la lista de tareas pendientes
+    mensaje = response.content.split(";")[-1].strip()[16:]  # Quitar "mensaje_planner: "
+    return {
+        "messages":            [mensaje],  # Solo el mensaje para planner
+        "memory_tasks":               tasks,
+        "conditional_message": "yes"
+    }
+
+
 
 def query_node(state: State) -> State:
     tasks = state.get("tasks", [])
@@ -862,15 +956,8 @@ def after_prompt(state: State) -> Literal["planner_node", "memory_node"]:
     return "planner_node" if state["conditional_message"] == "yes" else "memory_node"
 
 def after_memory(state: State) -> Literal["planner_node", "writer_node"]:
-    # Si se resolvió con memoria, va directamente a writer
-    if state["conditional_message"] == "resolved_by_memory":
-        return "writer_node"
     # Si necesita tools, va al planner
-    elif state["conditional_message"] == "yes":
-        return "planner_node"
-    # Si no puede resolver, intenta con planner
-    else:
-        return "planner_node"
+    return "planner_node" if state["conditional_message"] == "yes" else "writer_node"
 
 def after_executor(state: State) -> Literal["tool_executor_node", "query_node"]:
     return "tool_executor_node" if state["conditional_message"] == "pending" else "query_node"

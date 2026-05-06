@@ -16,7 +16,7 @@ from datetime import datetime
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 
-API_BASE = "http://localhost:8000"
+API_BASE = "http://fastapi_app:8000"
 
 st.set_page_config(
     page_title="Knowledge Base Curator",
@@ -374,7 +374,7 @@ else:
 with st.sidebar:
     st.markdown("### Navegación")
     pagina = st.radio(
-        "",
+        "Página",
         ["Documentos", "Consultar Agente", "Sugerencias"],
         label_visibility="collapsed",
     )
@@ -407,7 +407,7 @@ if pagina == "Documentos":
     st.markdown("**Buscar en contenido de documentos (ChromaDB)**")
     col_search, col_btn = st.columns([4, 1])
     query_chroma = col_search.text_input(
-        "",
+        "Búsqueda",
         placeholder="Ej: errores ortograficos, fechas incorrectas...",
         label_visibility="collapsed",
         key="chroma_search"
