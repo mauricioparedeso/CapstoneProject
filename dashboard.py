@@ -375,7 +375,7 @@ with st.sidebar:
     st.markdown("### Navegación")
     pagina = st.radio(
         "Página",
-        ["Documentos", "Consultar Agente", "Sugerencias"],
+        ["Documentos", "Consultar Agente", "Sugerencias", "Memory Log"],
         label_visibility="collapsed",
     )
 
@@ -580,3 +580,31 @@ elif pagina == "Sugerencias":
     }
     st.json(ejemplo)
     st.caption("Este JSON es el contrato de datos que E3 deberá entregar cuando esté implementado.")
+
+# ── Página: Memory Log ───────────────────────────────────────────────────────
+
+elif pagina == "Memory Log":
+    st.subheader("Memory Log")
+    st.caption("Historial de interacciones del agente.")
+
+    col1, col2 = st.columns([1, 5])
+    if col1.button("Limpiar memoria"):
+        with open("app/memory_log.json", "w") as f:
+            json.dump([], f)
+        st.success("Memoria limpiada.")
+        st.rerun()
+
+    try:
+        with open("app/memory_log.json", "r") as f:
+            content = f.read().strip()
+            data = json.loads(content) if content else []
+    except Exception:
+        data = []
+
+    if not data:
+        st.info("No hay entradas en el memory log.")
+    else:
+        st.markdown(f"**{len(data)} entrada(s) registradas**")
+        for i, entry in enumerate(reversed(data)):
+            with st.expander(f"[{entry.get('node', 'unknown')}] — {entry.get('timestamp', '')[:19]}"):
+                st.json(entry)
