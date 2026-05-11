@@ -271,22 +271,20 @@ def chat_with_agent_stream(message, placeholder_progreso):
         "query_node":         "Generando sugerencias",
         "writer_node":        "Redactando respuesta final",
     }
-    NODOS_ORDEN = list(NODOS_ICONO.keys())
-    TOTAL = len(NODOS_ORDEN)
-
     respuesta_final = ""
     pasos_completados = []
 
     try:
-        r = requests.post(
+        with requests.post(
             f"{API_BASE}/agente/chat/stream",
             json={"message": message},
             timeout=120,
-        )
-
-        eventos = r.text.strip().split("\n\n")
-        for evento in eventos:
-            for line in evento.split("\n"):
+            stream=True,
+        ) as r:
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -299,14 +297,13 @@ def chat_with_agent_stream(message, placeholder_progreso):
                     label = NODOS_ICONO.get(nodo, nodo)
                     pct = data.get("porcentaje", 0)
                     pasos_completados.append((label, pct))
-
                     with placeholder_progreso.container():
                         st.markdown(f"""
                         <div style="background:#1a1a2e; border:1px solid #0099D8; border-radius:10px; padding:1rem 1.5rem; margin:0.5rem 0;">
                             <p style="color:#0099D8; font-weight:700; font-size:0.85rem; margin:0 0 0.8rem 0; letter-spacing:1px;">PROCESANDO PIPELINE</p>
                         """, unsafe_allow_html=True)
                         st.progress(pct, text=f"{label}... {pct}%")
-                        for paso_label, paso_pct in pasos_completados[:-1]:
+                        for paso_label, _ in pasos_completados[:-1]:
                             st.markdown(f"<p style='color:#aaa; font-size:0.82rem; margin:0.2rem 0;'>✓ {paso_label}</p>", unsafe_allow_html=True)
                         st.markdown(f"<p style='color:#0099D8; font-size:0.85rem; font-weight:600; margin:0.2rem 0;'>▶ {label}</p>", unsafe_allow_html=True)
                         st.markdown("</div>", unsafe_allow_html=True)
@@ -375,7 +372,7 @@ with st.sidebar:
     st.markdown("### Navegación")
     pagina = st.radio(
         "Página",
-        ["Documentos", "Consultar Agente", "Sugerencias"],
+        ["Documentos", "Consultar Agente", "Sugerencias", "Memory Log"],
         label_visibility="collapsed",
     )
 
@@ -526,9 +523,13 @@ elif pagina == "Consultar Agente":
 
     col_send, col_clear = st.columns([1, 5])
     enviar = col_send.button("Enviar")
+
     if col_clear.button("Limpiar chat"):
         st.session_state.chat_history = []
+        with open("app/memory_log.json", "w") as f:
+            json.dump([], f)
         st.rerun()
+        
 
     if enviar and pregunta.strip():
         st.session_state.chat_history.append({"role": "user", "content": pregunta})
@@ -576,3 +577,31 @@ elif pagina == "Sugerencias":
     }
     st.json(ejemplo)
     st.caption("Este JSON es el contrato de datos que E3 deberá entregar cuando esté implementado.")
+
+# ── Página: Memory Log ───────────────────────────────────────────────────────
+
+elif pagina == "Memory Log":
+    st.subheader("Memory Log")
+    st.caption("Historial de interacciones del agente.")
+
+    col1, col2 = st.columns([1, 5])
+    if col1.button("Limpiar memoria"):
+        with open("app/memory_log.json", "w") as f:
+            json.dump([], f)
+        st.success("Memoria limpiada.")
+        st.rerun()
+
+    try:
+        with open("app/memory_log.json", "r") as f:
+            content = f.read().strip()
+            data = json.loads(content) if content else []
+    except Exception:
+        data = []
+
+    if not data:
+        st.info("No hay entradas en el memory log.")
+    else:
+        st.markdown(f"**{len(data)} entrada(s) registradas**")
+        for i, entry in enumerate(reversed(data)):
+            with st.expander(f"[{entry.get('node', 'unknown')}] — {entry.get('timestamp', '')[:19]}"):
+                st.json(entry)

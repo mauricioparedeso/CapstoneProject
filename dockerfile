@@ -15,6 +15,7 @@
 
 #Docker compose stop
 
+#docker exec fastapi_app pip install langfuse
 
 FROM python:3.11-slim
 

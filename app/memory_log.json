@@ -5,8 +5,7 @@
     "iterations": 0,
     "message": "dame la lista de los primeros archivos, y dime que errores hay en cada uno, tambien dime si hay alguna fecha desactualizada y sugiere como arreglarla",
     "tasks": [],
-    "conditional_message": null,
-    "memory_tasks": []
+    "conditional_message": null
   },
   {
     "timestamp": "2026-05-02t00:17:00.583286",
@@ -14,8 +13,7 @@
     "iterations": 1,
     "message": "{\"needs_tools\": true}",
     "tasks": [],
-    "conditional_message": "yes",
-    "memory_tasks": []
+    "conditional_message": "yes"
   },
   {
     "timestamp": "2026-05-02t00:17:08.111063",
@@ -54,7 +52,6 @@
         "suggestion_message": ""
       }
     ],
-    "conditional_message": "done",
-    "memory_tasks": []
+    "conditional_message": "done"
   }
 ]
