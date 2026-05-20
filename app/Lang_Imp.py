@@ -476,21 +476,10 @@ def buscar_en_web(query: str):
             output.append(f"[Resultado {i}]\nContenido: {content}")
         resultado = "\n\n---\n\n".join(output)
         if urls:
-            resultado += f"\n\nURLs_FUENTES: {" | ".join(urls)}"
+            resultado += "\n\nURLs_FUENTES: " + " | ".join(urls)
         return resultado
     except Exception as e:
         return f"Error en búsqueda web: {str(e)}"
-
-
-
-
-
-
-
-
-
-
-
 
 
 def is_valid_word(word):
