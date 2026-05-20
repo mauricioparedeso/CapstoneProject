@@ -17,6 +17,7 @@ services:
 
   dashboard:
     image: mi-app
+    pull_policy: never
     container_name: streamlit_app
     command: >
       streamlit run dashboard.py

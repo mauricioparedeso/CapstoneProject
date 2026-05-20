@@ -10,7 +10,6 @@ requests
 aiohttp
 pypdf
 tiktoken
-daytime
 pyenchant
 
 chromadb
@@ -24,4 +23,8 @@ langchain-groq
 pytest
 sentence-transformers
 
+langchain-tavily
+langchain-community
 streamlit
+docx2txt
+transformers==4.40.0

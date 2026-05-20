@@ -5,6 +5,7 @@ Router de documentos — endpoints de la E1.
   GET    /documents/{id}     → US4
   GET    /documents/         → US5
 """
+from langchain_community.document_loaders import Docx2txtLoader
 from datetime import datetime
 from typing import Optional
 
@@ -89,7 +90,19 @@ async def upload_document_endpoint(
             # GUARDAR EN CHROMA (Esto llena el sqlite3 y genera vectores)
             vector_store.add_documents(chunks)
             indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos"
+        elif "docx" in doc.file_format.lower():
+            loader = Docx2txtLoader(temp_path)
+            pages = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            chunks = text_splitter.split_documents(pages)
             
+            for chunk in chunks:
+                chunk.metadata["doc_id"] = doc.id
+                chunk.metadata["source"] = doc.original_filename
+            
+            vector_store.add_documents(chunks)
+            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos"
+                
     except Exception as e:
         indexing_msg = f"Error en indexación: {str(e)}"
     finally:
@@ -132,3 +145,37 @@ def list_documents_endpoint(
         total=len(docs),
         documents=[DocumentResponse.model_validate(d) for d in docs],
     )
+
+@router.delete("/{doc_id}", status_code=200)
+def delete_document_endpoint(
+    doc_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Elimina un documento de la Knowledge Base — SQLite + ChromaDB + storage.
+    """
+    from app.services.document_service import get_document
+    from app.models.document import Document
+    import os
+
+    # 1. Buscar el documento en SQLite
+    doc = get_document(doc_id, db)
+
+    # 2. Eliminar chunks de ChromaDB
+    try:
+        results = vector_store.get(where={"doc_id": doc_id})
+        if results and results.get("ids"):
+            vector_store.delete(ids=results["ids"])
+    except Exception as e:
+        print(f"[WARNING] No se pudieron eliminar chunks de ChromaDB: {e}")
+
+    # 3. Eliminar archivo del storage
+    storage_path = f"app/storage/{doc_id}.{doc.file_format}"
+    if os.path.exists(storage_path):
+        os.remove(storage_path)
+
+    # 4. Eliminar registro de SQLite
+    db.delete(doc)
+    db.commit()
+
+    return {"message": f"Documento {doc_id} eliminado correctamente."}

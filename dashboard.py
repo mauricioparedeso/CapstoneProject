@@ -8,7 +8,7 @@ Correr con:
 Requiere que la API esté corriendo en:
     https://literate-capybara-g456xxg95x652979q-8000.app.github.dev
 """
-
+import time
 import streamlit as st
 import requests
 import json
@@ -349,14 +349,18 @@ def check_api():
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
-st.markdown("""
-<div class="ss-header">
-    <div>
-        <h1>Knowledge Base Curator</h1>
-        <p>Panel de gestión curricular con IA · SoftServe</p>
+col_logo, col_title = st.columns([1, 8])
+with col_logo:
+    st.image("assets/logoSoftserve.jpeg", width=80)
+with col_title:
+    st.markdown("""
+    <div class="ss-header">
+        <div>
+            <h1>Knowledge Base Curator</h1>
+            <p>Panel de gestión curricular con IA · <a href="https://www.softserveinc.com/" style="color:#0099D8;">SoftServe</a></p>
+        </div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # Estado de la API
 api_ok = check_api()
@@ -383,16 +387,22 @@ if pagina == "Documentos":
 
     # Upload
     with st.expander("Subir nuevo documento", expanded=False):
+        if "upload_key" not in st.session_state:
+            st.session_state.upload_key = 0
+
         archivo = st.file_uploader(
             "Selecciona un archivo",
             type=["pdf", "docx", "txt"],
             help="Formatos soportados: PDF, DOCX, TXT",
+            key=f"uploader_{st.session_state.upload_key}",
         )
         if archivo and st.button("Subir documento"):
             with st.spinner("Subiendo..."):
                 resultado, status = upload_document(archivo)
             if status == 201:
                 st.success(f"Documento subido. ID: `{resultado['document']['id']}`")
+                st.session_state.upload_key += 1
+                time.sleep(3)
                 st.rerun()
             else:
                 st.error(f"Error: {resultado.get('detail', resultado)}")
@@ -464,17 +474,30 @@ if pagina == "Documentos":
             fmt = doc["file_format"]
             badge_class = f"badge-{fmt}"
 
-            st.markdown(f"""
-            <div class="doc-card">
-                <div class="doc-title">{doc["original_filename"]}</div>
-                <div class="doc-meta">
-                    <span class="badge {badge_class}">{fmt.upper()}</span>
-                    &nbsp;·&nbsp; {size_kb} KB
-                    &nbsp;·&nbsp; Subido el {fecha}
-                    &nbsp;·&nbsp; <code style="font-size:0.75rem">{doc["id"][:8]}...</code>
+            col_doc, col_btn = st.columns([9, 1])
+            with col_doc:
+                st.markdown(f"""
+                <div class="doc-card">
+                    <div class="doc-title">{doc["original_filename"]}</div>
+                    <div class="doc-meta">
+                        <span class="badge {badge_class}">{fmt.upper()}</span>
+                        &nbsp;·&nbsp; {size_kb} KB
+                        &nbsp;·&nbsp; Subido el {fecha}
+                        &nbsp;·&nbsp; <code style="font-size:0.75rem">{doc["id"][:8]}...</code>
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+            with col_btn:
+                if st.button("🗑️", key=f"del_{doc['id']}", help="Eliminar documento"):
+                    try:
+                        r = requests.delete(f"{API_BASE}/documents/{doc['id']}", timeout=10)
+                        if r.status_code == 200:
+                            st.success("Documento eliminado.")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {r.json().get('detail', 'desconocido')}")
+                    except Exception as e:
+                        st.error(f"Error al conectar: {e}")
 
 
 # ── Página: Consultar Agente ──────────────────────────────────────────────────
