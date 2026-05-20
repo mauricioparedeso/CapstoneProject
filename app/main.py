@@ -19,7 +19,8 @@ import chromadb
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from app.Lang_Imp import APP as agente_grafo
+from app.Lang_Imp import APP as agente_grafo  # Importamos el grafo compilado
+from app.Lang_Imp import CONFIG  # Importamos la configuración del grafo
 from pydantic import BaseModel
 
 app = FastAPI(
@@ -53,7 +54,9 @@ async def chatear_con_agente(query: ChatQuery):
     """
     try:
         inputs = {"messages": [query.message]}
-        resultado = agente_grafo.invoke(inputs, config={"recursion_limit": 50})
+        resultado = agente_grafo.invoke(inputs, config=CONFIG)
+        
+        # Extraemos el contenido del último mensaje (la respuesta del asistente)
         ultimo_mensaje = resultado["messages"][-1]
         if isinstance(ultimo_mensaje, str):
             respuesta_final = ultimo_mensaje

@@ -22,6 +22,7 @@ langchain-core
 langchain-groq
 pytest
 sentence-transformers
+langfuse
 
 langchain-tavily
 langchain-community
