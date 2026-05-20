@@ -24,6 +24,7 @@ from langgraph.prebuilt import ToolNode
 #from langchain_openai import ChatOpenAI
 #from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from langchain_tavily import TavilySearch
 from transformers import AutoTokenizer
 
 import json, os, unicodedata, enchant
@@ -39,6 +40,8 @@ from langfuse import observe
 
 import re
 from datetime import datetime
+
+os.environ["TAVILY_API_KEY"] = "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"
 
 SYSTEM_PROMPT = SystemMessage(
     content=(
@@ -62,8 +65,9 @@ PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.<br>\n"
     "Cada tarea es una petición atómica del usuario.<br>\n"
     "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt.<br>\n<br>\n"
-    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content'].<br>\n"
-   "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' para detectar datos erróneos como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías.<br>\n"
+    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content', 'web_search'].<br>\n"
+    "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' para detectar datos erróneos como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías. Usa 'web_search' ÚNICAMENTE para preguntas sobre eventos recientes, noticias actuales, o información externa que NO pueda estar en los documentos de la knowledge base. NO uses 'web_search' para preguntas sobre documentos subidos, análisis de contenido, errores ortográficos o fechas en archivos.<br>\n"
+    "CASO ESPECIAL — Resumen ejecutivo: Si el usuario pregunta algo que requiere comparar el contenido de los documentos con información externa actual (por ejemplo: '¿mis documentos están desactualizados?', '¿qué tan relevante es mi contenido?'), genera DOS tasks: la primera con 'consultar_knowledge_base' y la segunda con 'buscar_en_web'. El writer consolidará ambos resultados en un resumen ejecutivo.<br>\n"
     "Si hay 2 tareas con la misma intención, combínalas en una sola tarea con un mensaje que incluya ambas peticiones, para optimizar el uso de herramientas.<br>\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:<br>\n"
     ' {"task_name": "str", "status": "pending", "task_message": "str", "intention": "str", "used_tool": "str"}<br>\n'
@@ -78,10 +82,14 @@ EXECUTOR_PROMPT = SystemMessage(content=(
 WRITER_PROMPT = SystemMessage(content=(
     "Eres un analizador y redactor final.<br>\n"
     "Recibirás una lista completa de tareas ejecutadas, incluyendo sus resultados, estado y herramienta utilizada.<br>\n<br>\n"
-
     "Tu objetivo es generar un resumen general claro y útil para el usuario.<br>\n<br>\n"
-
-    "Debes:<br>\n"
+    "CASO ESPECIAL — Resumen ejecutivo: Si hay resultados de AMBAS tools 'consultar_knowledge_base' Y 'buscar_en_web', genera un resumen ejecutivo con esta estructura:<br>\n"
+    "1. **Estado actual de los documentos** — qué encontró en la knowledge base<br>\n"
+    "2. **Contexto externo** — qué dice la web sobre el mismo tema<br>\n"
+    "3. **Brecha identificada** — qué hay en los documentos que ya no es válido o está desactualizado<br>\n"
+    "4. **Recomendación** — qué debería actualizar el instructor<br>\n"
+    "Si el resultado de alguna tarea contiene 'URLs_FUENTES:', extrae esas URLs y colócalas al final en una sección 'Fuentes:' como lista.<br>\n<br>\n"
+    "CASO NORMAL — para cualquier otra combinación de tools:<br>\n"
     "- Resumir brevemente qué se analizó.<br>\n"
     "- Indicar qué herramientas se utilizaron.<br>\n"
     "- Contar cuántos errores, inconsistencias o problemas fueron detectados por cada herramienta o tarea.<br>\n"
@@ -89,14 +97,7 @@ WRITER_PROMPT = SystemMessage(content=(
     "- Para tareas con used_tool='none', resolverlas usando tu propio conocimiento.<br>\n"
     "- Destacar hallazgos importantes o repetitivos.<br>\n"
     "- Dar recomendaciones simples y prácticas basadas en los resultados.<br>\n<br>\n"
-
     "Las recomendaciones deben ser cortas, accionables y fáciles de entender.<br>\n"
-    "Ejemplos:<br>\n"
-    "- corregir formatos de fecha inconsistentes<br>\n"
-    "- revisar ortografía antes de subir documentos<br>\n"
-    "- renombrar archivos ambiguos<br>\n"
-    "- validar datos faltantes<br>\n<br>\n"
-
     "Mantén un tono profesional, claro y conciso.<br>\n"
     "No inventes errores que no aparezcan en los resultados.<br>\n"
     "Si no se detectaron problemas, indícalo explícitamente."
@@ -122,7 +123,7 @@ MEMORY_PROMPT = SystemMessage(content=(
     "Si está en memoria:<br>\n" 
     '{"task_name": "str", "status": "done", "message": "COPIA EXACTA DEL LOG", "intention": "str", "used_tool": "memory"}<br>\n<br>\n' 
     "Si NO está en memoria:<br>\n" 
-    '{"task_name": "str", "status": "pending", "message": "", "intention": "str", "used_tool": "none | get_weather | consultar_knowledge_base"}<br>\n<br>\n' 
+    '{"task_name": "str", "status": "pending", "message": "", "intention": "str", "used_tool": "none | get_weather | consultar_knowledge_base | buscar_en_web"}<br>\n<br>\n' 
     "INTENCIONES PERMITIDAS:<br>\n" "weather, file listing, general analysis, detect redundancy, detect incorrect info, detect conflicts, detect obsolescence, detect outdated content<br>\n<br>\n" 
     "MENSAJE PARA PLANNER:<br>\n" 
     "Construye un string que contenga SOLO los nombres de las tareas con status='pending'.<br>\n" 
@@ -208,6 +209,7 @@ TOOL_SET = SystemMessage(
         "Tienes acceso a las siguientes herramientas:<br>\n"
         "1. get_weather(location): Devuelve el clima actual para una ubicación dada.<br>\n"
         "2. consultar_knowledge_base(query): Consulta la base de datos de documentos. Si la query pide nombres, lista todos.<br>\n"
+        "3. buscar_en_web(query): Busca información actualizada en internet. Úsala para preguntas sobre eventos recientes, noticias actuales o información externa.<br>\n"
     )
 )
 
@@ -375,7 +377,30 @@ def consultar_knowledge_base(query: str):
             return f"Archivos indexados en la base de datos: {nombres}"
         
         if intention == "general analysis":
-            pass
+            try:
+                docs = vector_store.similarity_search(message, k=5)
+                if not docs:
+                    hallazgos.append("No se encontró contenido relevante en los documentos.")
+                else:
+                    fragmentos = "\n\n".join([
+                        f"[Fuente: {d.metadata.get('source', 'desconocido')}]\n{d.page_content}"
+                        for d in docs
+                    ])
+                    response = llm.invoke([
+                        SystemMessage(content=(
+                            "Eres un analizador de documentos académicos.\n"
+                            "Se te darán fragmentos de documentos. Genera un resumen conciso que incluya:\n"
+                            "- Temas principales cubiertos\n"
+                            "- Nivel de profundidad del contenido\n"
+                            "- Tecnologías o conceptos clave mencionados\n"
+                            "- Observaciones sobre relevancia o actualidad\n"
+                            "Sé conciso y directo."
+                        )),
+                        SystemMessage(content=f"Fragmentos a analizar:\n{fragmentos}")
+                    ])
+                    hallazgos.append(response.content)
+            except Exception as e:
+                hallazgos.append(f"Error en análisis general: {str(e)}")
 
         if intention == "detect redundancy":
             hallazgos.append(check_redundancy(message))
@@ -415,6 +440,46 @@ def memory_tool(query: str): #Reemplaza al memory node
     # El query podría incluir información sobre qué tipo de información se busca en la memoria (ej: "¿He respondido algo similar antes?").
     # La función podría analizar el memory_log.json y devolver información relevante al LLM para que la tenga en cuenta al generar la respuesta.
     return "Función de memoria aún no implementada."
+
+@tool
+def buscar_en_web(query: str):
+    """Busca información actualizada en internet usando Tavily."""
+    from datetime import datetime
+    DOMINIOS_EXCLUIDOS = [
+        "youtube.com", "youtu.be",
+        "instagram.com", "tiktok.com",
+        "twitter.com", "x.com",
+        "facebook.com"
+    ]
+    try:
+        año_actual = datetime.now().year
+        if str(año_actual) not in query and str(año_actual - 1) not in query:
+            query = f"{query} {año_actual}"
+        search = TavilySearch(max_results=5)
+        response = search.invoke(query)
+        if isinstance(response, dict):
+            results = response.get("results", [])
+        elif isinstance(response, list):
+            results = response
+        else:
+            return str(response)
+        results = [r for r in results if isinstance(r, dict) and not any(d in r.get("url", "") for d in DOMINIOS_EXCLUIDOS)]
+        if not results:
+            return "No se encontraron resultados en fuentes textuales."
+        output = []
+        urls = []
+        for i, r in enumerate(results, 1):
+            url = r.get("url", "")
+            content = r.get("content", "")
+            if url:
+                urls.append(url)
+            output.append(f"[Resultado {i}]\nContenido: {content}")
+        resultado = "\n\n---\n\n".join(output)
+        if urls:
+            resultado += f"\n\nURLs_FUENTES: {" | ".join(urls)}"
+        return resultado
+    except Exception as e:
+        return f"Error en búsqueda web: {str(e)}"
 
 
 
@@ -714,6 +779,7 @@ def check_general_analysis(query: str):
 TOOLS_MAP = {
     "get_weather": get_weather,
     "consultar_knowledge_base": consultar_knowledge_base,
+    "buscar_en_web": buscar_en_web,
 }
 
 
@@ -726,7 +792,7 @@ llm = ChatGroq(
 )
 
 # Actualiza tu lista de herramientas
-tools = [get_weather, consultar_knowledge_base]
+tools = [get_weather, consultar_knowledge_base, buscar_en_web]
 llm_with_tools = llm.bind_tools(tools)
 tool_node = ToolNode(tools) # El ToolNode manejará automáticamente la ejecución
 
