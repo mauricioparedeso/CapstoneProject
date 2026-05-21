@@ -92,6 +92,10 @@ WRITER_PROMPT = SystemMessage(content=(
     "3. **Brecha identificada** — qué hay en los documentos que ya no es válido o está desactualizado<br>\n"
     "4. **Recomendación** — qué debería actualizar el instructor<br>\n"
     "Si el resultado de alguna tarea contiene 'URLs_FUENTES:', extrae esas URLs y colócalas al final en una sección 'Fuentes:' como lista.<br>\n<br>\n"
+    #=======================CHECK_CONCLFICTS=======================================================
+    "CASO SKIPPED — check_conflicts skipped: Si el resultado de una tarea contiene 'status: skipped' y 'reason: files_not_found', NO reportes ningún conflicto.<br>\n"
+    "Informa al usuario que los archivos solicitados no están indexados en la base de datos y lista los archivos disponibles. Usa el campo 'writer_hint' como base para redactar.<br>\n"
+    #=======================CHECK_CONCLFICTS=======================================================
     "CASO NORMAL — para cualquier otra combinación de tools:<br>\n"
     "- Resumir brevemente qué se analizó.<br>\n"
     "- Indicar qué herramientas se utilizaron.<br>\n"
@@ -200,13 +204,6 @@ SPELLING_PROMPT = SystemMessage(content=(
 
 
 
-
-
-
-
-
-
-
 TOOL_SET = SystemMessage(
     content=(
         "Tienes acceso a las siguientes herramientas:<br>\n"
@@ -217,16 +214,6 @@ TOOL_SET = SystemMessage(
 )
 
 MEMORY_FILE = "app/memory_log.json"
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -339,13 +326,6 @@ def del_memory_data():
 
 
 
-
-
-
-
-
-
-
 #====================================================================================
 # Definimos herramientas, osease, funciones que pueden ser llamadas por un toolnode
 #====================================================================================
@@ -413,7 +393,7 @@ def consultar_knowledge_base(query: str):
             hallazgos.append(detectar_errores_ortograficos(message))
 
         if intention == "detect conflicts":
-            hallazgos.append("check_conflicts() aún no implementada.")
+            hallazgos.append(check_conflicts(message))
 
         if intention == "detect obsolescence":
             hallazgos.append("check_obsolescence() aún no implementada.")
@@ -726,33 +706,56 @@ def check_redundancy(query: str):
 # ====================================================================================
 
 
-
 # ====================================================================================
 # PROMPT — EXTRACCIÓN DE CLAIMS
 # ====================================================================================
 
 CONFLICT_EXTRACTION_PROMPT = SystemMessage(content=(
-    "Eres un extractor semántico de afirmaciones factuales.<br>\n"
-    "Extrae TODAS las proposiciones verificables presentes en el texto.<br>\n<br>\n"
+    "Eres un extractor de HECHOS VERIFICABLES para detectar contradicciones entre documentos.<br>\n"
+    "Tu objetivo es extraer SOLO afirmaciones concretas que PUEDAN CONTRADECIRSE.<br>\n<br>\n"
 
-    "Cada proposición debe contener:<br>\n"
-    "- concepto_clave<br>\n"
-    "- sujeto<br>\n"
-    "- complementos<br>\n"
-    "- fragmento_original<br>\n<br>\n"
+    "ESTRUCTURA DE CADA HECHO:<br>\n"
+    "- concepto_clave: El HECHO ESPECÍFICO y VERIFICABLE. Ej: 'año de publicación de X', 'inventor de Y', 'descubridor de Z', 'versión de framework W'<br>\n"
+    "- sujeto: QUIÉN, QUÉ o ENTIDAD ESPECÍFICA. Ej: 'Alan Turing', 'Python 3.8', 'red neuronal convolucional'<br>\n"
+    "- complementos: detalles contextuales {tipo, valor}. Ej: {'tipo': 'año', 'valor': '1936'}<br>\n"
+    "- fragmento_original: el texto exacto de donde se extrajo<br>\n<br>\n"
 
-    "REGLAS:<br>\n"
-    "- Extrae SOLO afirmaciones factuales verificables<br>\n"
-    "- Ignora opiniones, preguntas e instrucciones<br>\n"
-    "- complementos debe ser una lista de objetos {tipo, valor}<br>\n"
-    "- Mantén los valores EXACTOS<br>\n"
-    "- No inventes información<br>\n<br>\n"
-    "- Si no hay proposiciones factuales, devuelve []\n\n"
-    "FORMATO DE SALIDA — JSON array estricto, sin texto adicional, sin bloques markdown:\n"
+    "REGLAS DE EXTRACCIÓN:<br>\n"
+    "1. Extrae SOLO hechos que PUEDEN CONTRADECIRSE entre documentos:<br>\n"
+    "   ✅ BUENO: 'año de publicación del paper X', 'creador del algoritmo Y', 'versión lanzada de Z'<br>\n"
+    "   ✅ BUENO: 'autor de la propuesta X', 'fecha de lanzamiento de framework Y'<br>\n"
+    "   ❌ MALO: 'definición de machine learning' (es conceptual, raramente contradictoria)<br>\n"
+    "   ❌ MALO: 'explicación de una fórmula' (típicamente igual en todas partes)<br>\n<br>\n"
+
+    "2. Prioriza hechos HISTÓRICOS, TEMPORALES o DE AUTORÍA:<br>\n"
+    "   ✅ BUENO: 'año de creación del lenguaje Python'<br>\n"
+    "   ✅ BUENO: 'investigador que propuso la arquitectura X'<br>\n"
+    "   ✅ BUENO: 'versión actual de TensorFlow'<br>\n"
+    "   ❌ MALO: 'qué es programación orientada a objetos' (definición conceptual)<br>\n<br>\n"
+
+    "3. Estructura para HECHOS ESPECÍFICOS:<br>\n"
+    "   Concepto_clave DEBE incluir qué se está verificando:<br>\n"
+    "   - '[año|fecha|versión] de [concepto específico]'<br>\n"
+    "   - '[creador|inventor|autor|descubridor] de [concepto específico]'<br>\n"
+    "   - '[característica] de [entidad específica]'<br>\n<br>\n"
+
+    "4. NO extraigas:<br>\n"
+    "   - Definiciones o explicaciones teóricas<br>\n"
+    "   - Principios universales que no varían<br>\n"
+    "   - Descripciones genéricas sin sujeto específico<br>\n"
+    "   - Diálogos, narrativa o contenido sin valor factual<br>\n"
+    "   - Hechos obvios o universalmente conocidos<br>\n<br>\n"
+
+    "5. Mantén valores EXACTOS (sin normalizar):<br>\n"
+    "   - Nombres de personas: exactos del texto<br>\n"
+    "   - Años/fechas: exactos del texto<br>\n"
+    "   - Nombres de tecnologías: exactos del texto<br>\n<br>\n"
+
+    "6. Si NO HAY hechos verificables/contradictorios, devuelve []<br>\n<br>\n"
+
+    "FORMATO DE SALIDA — JSON array estricto, sin texto adicional, sin bloques markdown:<br>\n"
     '[{"concepto_clave":"str","sujeto":"str|null","complementos":[{"tipo":"str","valor":"str"}],"fragmento_original":"str"}]'
 ))
-
-
 
 # ====================================================================================
 # NORMALIZACIÓN SEMÁNTICA
@@ -879,7 +882,7 @@ def extract_claims_from_text(
 
 def group_claims_semantically(
     claims: list[dict],
-    threshold: float = 0.82
+    threshold: float = 0.7
 ) -> dict[str, list[dict]]:
     """
     Agrupa claims por similitud semántica de concepto.
@@ -1101,6 +1104,14 @@ def compare_claims_within_group(
 
     return conflicts
 
+def _extract_mentioned_files(message: str) -> list[str]:
+    """
+    Extrae nombres de archivo mencionados explícitamente en el mensaje.
+
+    Detecta patrones como: archivo_1.txt, documento.pdf, mi_cv.docx
+    """
+    pattern = re.compile(r"\b[\w\-]+\.[a-zA-Z]{2,5}\b")
+    return pattern.findall(message)
 
 # ====================================================================================
 # FUNCIÓN PRINCIPAL
@@ -1145,7 +1156,88 @@ def check_conflicts(query: str):
             )
 
             if doc and doc.strip():
-                archivos[source].append(doc)
+                archivos[source].append(doc.strip())
+
+# =========================================================
+# DEBUG — VER ARCHIVOS DETECTADOS EN CHROMADB
+# =========================================================
+
+        # print("\n===== ARCHIVOS DETECTADOS EN CHROMADB =====")
+
+        # for nombre in archivos.keys():
+        #     print(nombre)
+
+# =========================================================
+# DEBUG — VER ARCHIVOS DETECTADOS EN CHROMADB
+# =========================================================
+
+        archivos_en_kb = set(archivos.keys())
+        archivos_solicitados = _extract_mentioned_files(message)
+
+        if archivos_solicitados:
+            # El usuario mencionó archivos específicos
+            archivos_encontrados = [
+                f for f in archivos_solicitados
+                if f in archivos_en_kb
+            ]
+            archivos_no_encontrados = [
+                f for f in archivos_solicitados
+                if f not in archivos_en_kb
+            ]
+
+            # Avisar si hay archivos faltantes
+            if archivos_no_encontrados:
+                print(
+                    f"\n[WARNING] Archivos solicitados no encontrados: "
+                    f"{', '.join(archivos_no_encontrados)}"
+                )
+
+            # Caso: NINGUNO de los archivos solicitados existe
+            if len(archivos_encontrados) == 0:
+                return {
+                    "tool": "check_conflicts",
+                    "status": "skipped",
+                    "reason": "no_files_found",
+                    "query": message,
+                    "files_requested": archivos_solicitados,
+                    "files_found": [],
+                    "files_not_found": archivos_no_encontrados,
+                    "files_available": list(archivos_en_kb),
+                    "writer_hint": (
+                        f"Ninguno de los archivos solicitados "
+                        f"({', '.join(archivos_solicitados)}) "
+                        f"se encuentra indexado en la base de datos vectorial. "
+                        f"Archivos disponibles: {', '.join(archivos_en_kb) if archivos_en_kb else 'ninguno'}."
+                    )
+                }
+
+            # Caso: Solo 1 archivo encontrado (insuficiente para detectar conflictos)
+            if len(archivos_encontrados) == 1:
+                return {
+                    "tool": "check_conflicts",
+                    "status": "skipped",
+                    "reason": "insufficient_files",
+                    "query": message,
+                    "files_requested": archivos_solicitados,
+                    "files_found": archivos_encontrados,
+                    "files_not_found": archivos_no_encontrados,
+                    "files_available": list(archivos_en_kb),
+                    "writer_hint": (
+                        f"De los archivos solicitados, solo se encontró 1 "
+                        f"({archivos_encontrados[0]}) en la base de datos. "
+                        f"Se requieren al menos 2 archivos para detectar conflictos. "
+                        f"Archivos no encontrados: {', '.join(archivos_no_encontrados)}. "
+                        f"Archivos disponibles: {', '.join(archivos_en_kb)}."
+                    )
+                }
+
+            # Caso: 2 o más archivos encontrados → proceder
+            # Filtrar para analizar SOLO los solicitados que existen
+            archivos = {
+                src: chunks
+                for src, chunks in archivos.items()
+                if src in archivos_encontrados
+            }
 
         if len(archivos) < 2:
 
@@ -1175,10 +1267,18 @@ def check_conflicts(query: str):
         for source, chunks in archivos.items():
             selected_chunks = chunks[:MAX_CHUNKS_PER_FILE]
             for chunk in selected_chunks:
+
+                if len(chunk.strip()) < 20:
+                    continue
+
                 claims = extract_claims_from_text(
                     source=source,
                     text=chunk
                 )
+# ============================TEST====================================
+#                print(f"[DEBUG] Claims de {source}: {claims}")
+# ============================TEST====================================
+                
                 all_claims.extend(claims)
 
         if len(all_claims) < 2:
@@ -1753,33 +1853,62 @@ APP = graph.compile().with_config({
     "callbacks": [langfuse_handler]
 })
 
+# if __name__ == "__main__":
+
+#     import json
+
+#     print(
+#         "\n================================================="
+#         "\nTEST AISLADO — CHECK_CONFLICTS"
+#         "\n=================================================\n"
+#     )
+
+#     resultado = check_conflicts(
+#         "Analiza conflictos entre fuentes_energia_A.pdf y fuentes_energia_C.txt"
+#     )
+
+#     print(
+#         json.dumps(
+#             resultado,
+#             indent=2,
+#             ensure_ascii=False
+#         )
+#     )
+
+#     print(
+#         "\n================================================="
+#         "\nFIN TEST"
+#         "\n=================================================\n"
+#     )
 
 
-if __name__ == "__main__":
-    print("=================================================\nINICIO DE LA COMPILACION\n=================================================")
 
-    new_state = APP.invoke(
-    {
-        "messages": [
-            "dame la suma del 1 al 10, el clima en yorkshire, y el clima en bogota, y los nombres de los archivos de mi knowledge base, revisa que errores de fecha y ortografia tienen, y dime porque los zorros articos comen zapatos"
-        ]
-    },
-    config=CONFIG
-    )
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    print(new_state["messages"][-1].content)
-    print("=================================================\nFIN DE LA COMPILACION\n=================================================")
 
-    print("=================================================\nINICIO DEL GRAFO\n=================================================")
-    from langchain_core.runnables.graph import MermaidDrawMethod
-    print(APP.get_graph().draw_mermaid())
-    # Pegan el resultado en https://mermaid.live/ para visualizar el grafo.
-    print("=================================================\nFIN DEL GRAFO\n=================================================")
+# if __name__ == "__main__":
+#     print("=================================================\nINICIO DE LA COMPILACION\n=================================================")
+
+#     new_state = APP.invoke(
+#     {
+#         "messages": [
+#             "dame la suma del 1 al 10, el clima en yorkshire, y el clima en bogota, y los nombres de los archivos de mi knowledge base, revisa que errores de fecha y ortografia tienen, y dime porque los zorros articos comen zapatos"
+#         ]
+#     },
+#     config=CONFIG
+#     )
+    
+    
+    
+    
+    
+    
+    
+    
+    
+#     print(new_state["messages"][-1].content)
+#     print("=================================================\nFIN DE LA COMPILACION\n=================================================")
+
+#     print("=================================================\nINICIO DEL GRAFO\n=================================================")
+#     from langchain_core.runnables.graph import MermaidDrawMethod
+#     print(APP.get_graph().draw_mermaid())
+#     # Pegan el resultado en https://mermaid.live/ para visualizar el grafo.
+#     print("=================================================\nFIN DEL GRAFO\n=================================================")

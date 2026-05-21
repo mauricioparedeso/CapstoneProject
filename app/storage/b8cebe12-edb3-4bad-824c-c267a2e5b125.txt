@@ -1,0 +1,66 @@
+========================================================
+  FUENTES DE GENERACION DE ENERGIA
+  Documento C — Version TXT
+========================================================
+
+1. DEFINICION DE ENERGIA
+--------------------------------------------------------
+La energia es la capacidad de un sistema fisico para realizar trabajo.
+En termodinamica, se define formalmente como la propiedad escalar que
+permite cuantificar la capacidad de producir cambios en un sistema.
+Segun el primer principio de la termodinamica, la energia no se crea ni
+se destruye, solo se transforma de una forma en otra (Joule, 1843).
+
+
+2. FUENTES DE GENERACION
+========================================================
+
+2.1. ENERGIA SOLAR FOTOVOLTAICA
+--------------------------------------------------------
+Recurso energetico    : Radiacion solar (fotones)
+Principio fisico      : Cuando la luz solar impacta sobre una celda de selenio,
+                        se genera una diferencia de potencial electrico. Este
+                        fenomeno, denominado efecto fotovoltaico, fue documentado
+                        experimentalmente por primera vez con selenio amorfo.
+Anio de descubrimiento: 1839
+Descubridor           : Alexandre-Edmond Becquerel (Paris, Francia)
+
+
+2.2. ENERGIA EOLICA
+--------------------------------------------------------
+Recurso energetico    : Energia cinetica del viento
+Principio fisico      : El viento, al incidir sobre las palas de un aerogenerador,
+                        ejerce una fuerza de sustentacion que genera rotacion. El
+                        eje conectado a un generador de imanes permanentes convierte
+                        el movimiento mecanico en corriente alterna trifasica.
+Anio de descubrimiento: 1887
+Descubridor           : James Blyth (Marykirk, Escocia)
+
+
+2.3. ENERGIA NUCLEAR (FISION)
+--------------------------------------------------------
+Recurso energetico    : Uranio-235 y Torio-232
+Principio fisico      : La fision nuclear consiste en la ruptura de nucleos atomicos
+                        pesados al ser bombardeados con neutrones termicos, liberando
+                        energia segun la ecuacion E=mc^2 propuesta por Einstein.
+                        El calor producido genera vapor para mover turbinas electricas.
+Anio de descubrimiento: 1938
+Descubridor           : Otto Hahn y Lise Meitner (Berlin, Alemania)
+
+
+2.4. ENERGIA MAREOMOTRIZ
+--------------------------------------------------------
+Recurso energetico    : Energia potencial y cinetica de las mareas
+Principio fisico      : La diferencia de nivel del mar entre la pleamar y la
+                        bajamar se aprovecha mediante compuertas que regulan el
+                        paso del agua a traves de turbinas de baja cabeza. La
+                        fuerza gravitacional combinada de la Luna y el Sol actua
+                        como fuente primaria de energia.
+Anio de descubrimiento: 1966
+Descubridor           : Electricite de France / Central Maremotriz de La Rance
+                        (Saint-Malo, Bretana, Francia)
+
+
+========================================================
+  FIN DEL DOCUMENTO
+========================================================
