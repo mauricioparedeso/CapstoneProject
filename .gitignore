@@ -1,2 +1,14 @@
-API_KEY.txt__pycache__/
+API_KEY.txt
+
+venv/
+
+__pycache__/
 *.pyc
+
+chroma_data/
+app/chroma_data/
+
+*.db
+*.sqlite3
+
+.DS_Store

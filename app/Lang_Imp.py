@@ -41,7 +41,10 @@ from langfuse import observe
 import re
 from datetime import datetime
 
-os.environ["TAVILY_API_KEY"] = "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"
+from difflib import SequenceMatcher
+import traceback
+
+os.environ["TAVILY_API_KEY"] = "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"
 
 SYSTEM_PROMPT = SystemMessage(
     content=(
@@ -685,9 +688,616 @@ def check_redundancy(query: str):
         return f"Error técnico en detector de redundancias: {str(e)}"
 
 
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#CHECK CONFLICTS
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+
+# ====================================================================================
+# CHECK CONFLICTS — HYBRID SEMANTIC CONFLICT DETECTOR
+# ====================================================================================
+#
+# Arquitectura:
+#
+#   1. Recuperación de chunks desde ChromaDB
+#   2. Agrupación por archivo
+#   3. Extracción semántica de claims (LLM)
+#   4. Normalización de conceptos
+#   5. Agrupación semántica de claims
+#   6. Comparación determinista en Python
+#   7. Explicación y confidence score
+#   8. Formateo final
+#
+# Filosofía:
+#
+#   - El LLM EXTRAE semántica
+#   - Python DETECTA contradicciones
+#   - El LLM NO decide toda la lógica
+#
+# ====================================================================================
+
+
+
+# ====================================================================================
+# PROMPT — EXTRACCIÓN DE CLAIMS
+# ====================================================================================
+
+CONFLICT_EXTRACTION_PROMPT = SystemMessage(content=(
+    "Eres un extractor semántico de afirmaciones factuales.<br>\n"
+    "Extrae TODAS las proposiciones verificables presentes en el texto.<br>\n<br>\n"
+
+    "Cada proposición debe contener:<br>\n"
+    "- concepto_clave<br>\n"
+    "- sujeto<br>\n"
+    "- complementos<br>\n"
+    "- fragmento_original<br>\n<br>\n"
+
+    "REGLAS:<br>\n"
+    "- Extrae SOLO afirmaciones factuales verificables<br>\n"
+    "- Ignora opiniones, preguntas e instrucciones<br>\n"
+    "- complementos debe ser una lista de objetos {tipo, valor}<br>\n"
+    "- Mantén los valores EXACTOS<br>\n"
+    "- No inventes información<br>\n<br>\n"
+    "- Si no hay proposiciones factuales, devuelve []\n\n"
+    "FORMATO DE SALIDA — JSON array estricto, sin texto adicional, sin bloques markdown:\n"
+    '[{"concepto_clave":"str","sujeto":"str|null","complementos":[{"tipo":"str","valor":"str"}],"fragmento_original":"str"}]'
+))
+
+
+
+# ====================================================================================
+# NORMALIZACIÓN SEMÁNTICA
+# ====================================================================================
+
+def normalize_concept(text: str) -> str:
+    """
+    Normaliza conceptos para agrupar variantes semánticamente similares.
+
+    Ejemplo:
+        "Descubrimiento de América"
+        "descubrimiento america"
+        "QUIEN DESCUBRIO AMERICA"
+
+    → todos convergen a una forma similar.
+    """
+
+    if not text:
+        return ""
+
+    text = normalize_text(text)
+
+    # eliminar caracteres raros
+    text = re.sub(r"[^\w\s]", " ", text)
+
+    # eliminar espacios múltiples
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+# ====================================================================================
+# SIMILITUD DE CONCEPTOS
+# ====================================================================================
+
+def concept_similarity(a: str, b: str) -> float:
+    """
+    Similaridad textual básica.
+
+    FUTURO:
+        reemplazar por embeddings similarity
+        usando Chroma/HuggingFaceEmbeddings.
+    """
+
+    return SequenceMatcher(None, a, b).ratio()
+
+
+# ====================================================================================
+# EXTRACCIÓN DE CLAIMS
+# ====================================================================================
+
+def extract_claims_from_text(
+    source: str,
+    text: str
+) -> list[dict]:
+    """
+    Extrae claims semánticos desde texto usando LLM.
+
+    Retorna:
+        [
+            {
+                "archivo": "...",
+                "concepto_clave": "...",
+                "sujeto": "...",
+                "complementos": [...],
+                "fragmento_original": "..."
+            }
+        ]
+    """
+
+    try:
+
+        response = llm.invoke([
+            CONFLICT_EXTRACTION_PROMPT,
+            SystemMessage(content=(
+                f"Archivo: {source}<br>\n"
+                f"Texto:<br>\n{text}"
+            ))
+        ])
+
+        content = response.content.strip()
+
+        # limpieza defensiva
+        content = re.sub(r"```json", "", content)
+        content = re.sub(r"```", "", content)
+
+        parsed = json.loads(content)
+
+        if not isinstance(parsed, list):
+            return []
+
+        claims = []
+
+        for claim in parsed:
+
+            if not isinstance(claim, dict):
+                continue
+
+            claims.append({
+                "archivo": source,
+                "concepto_clave": claim.get("concepto_clave", ""),
+                "concepto_normalizado": normalize_concept(
+                    claim.get("concepto_clave", "")
+                ),
+                "sujeto": claim.get("sujeto"),
+                "complementos": claim.get("complementos", []),
+                "fragmento_original": claim.get("fragmento_original", "")
+            })
+        return claims
+
+    except Exception as e:
+
+        print(
+            f"[check_conflicts] Error extrayendo claims "
+            f"de '{source}': {e}"
+        )
+
+        return []
+
+
+# ====================================================================================
+# AGRUPACIÓN SEMÁNTICA DE CLAIMS
+# ====================================================================================
+
+def group_claims_semantically(
+    claims: list[dict],
+    threshold: float = 0.82
+) -> dict[str, list[dict]]:
+    """
+    Agrupa claims por similitud semántica de concepto.
+
+    IMPORTANTE:
+        No usa igualdad exacta.
+        Usa similitud textual aproximada.
+
+    FUTURO:
+        reemplazar por clustering con embeddings.
+    """
+
+    groups = {}
+
+    for claim in claims:
+
+        concept = claim["concepto_normalizado"]
+        matched_group = None
+
+        for existing_group in groups.keys():
+            similarity = concept_similarity(
+                concept,
+                existing_group
+            )
+
+            if similarity >= threshold:
+                matched_group = existing_group
+                break
+
+        if matched_group:
+            groups[matched_group].append(claim)
+        else:
+            groups[concept] = [claim]
+
+    return groups
+
+
+# ====================================================================================
+# CONVERSIÓN DE COMPLEMENTOS A DICT
+# ====================================================================================
+
+def complements_to_dict(complements: list[dict]) -> dict:
+    """
+    Convierte:
+        [
+            {"tipo":"año","valor":"1492"}
+        ]
+    →
+        {
+            "año":"1492"
+        }
+    """
+    result = {}
+
+    for c in complements:
+        tipo = normalize_text(
+            str(c.get("tipo", ""))
+        )
+        valor = str(c.get("valor", "")).strip()
+
+        if tipo:
+            result[tipo] = valor
+
+    return result
+
+
+# ====================================================================================
+# COMPARADOR DETERMINISTA
+# ====================================================================================
+
+def compare_claims_within_group(
+    claims: list[dict]
+) -> list[dict]:
+    """
+    Detecta conflictos de forma determinista.
+    NO usa LLM para decidir contradicciones.
+    """
+
+    conflicts = []
+
+    for i in range(len(claims)):
+
+        for j in range(i + 1, len(claims)):
+            c1 = claims[i]
+            c2 = claims[j]
+
+            # ============================================================
+            # NUNCA comparar dentro del mismo archivo
+            # ============================================================
+
+            if c1["archivo"] == c2["archivo"]:
+                continue
+
+            sujeto_1 = normalize_text(
+                str(c1.get("sujeto", ""))
+            )
+
+            sujeto_2 = normalize_text(
+                str(c2.get("sujeto", ""))
+            )
+
+            sujeto_difiere = (
+                sujeto_1 != sujeto_2
+                and sujeto_1 != ""
+                and sujeto_2 != ""
+            )
+
+            comp_1 = complements_to_dict(
+                c1.get("complementos", [])
+            )
+
+            comp_2 = complements_to_dict(
+                c2.get("complementos", [])
+            )
+
+            shared_keys = (
+                set(comp_1.keys())
+                & set(comp_2.keys())
+            )
+
+            complementos_en_conflicto = []
+
+            for key in shared_keys:
+
+                v1 = normalize_text(
+                    str(comp_1[key])
+                )
+
+                v2 = normalize_text(
+                    str(comp_2[key])
+                )
+
+                # incompatibilidad real
+                if v1 != v2:
+                    complementos_en_conflicto.append(key)
+
+            # ============================================================
+            # NO hay conflicto
+            # ============================================================
+
+            if (
+                not sujeto_difiere
+                and not complementos_en_conflicto
+            ):
+                continue
+
+            # ============================================================
+            # CLASIFICACIÓN
+            # ============================================================
+
+            if sujeto_difiere and complementos_en_conflicto:
+                tipo = "Tipo 1"
+            else:
+                tipo = "Tipo 2"
+
+            # ============================================================
+            # CONFIDENCE SCORE
+            # ============================================================
+
+            confidence = 0.75
+
+            if sujeto_difiere:
+                confidence += 0.10
+
+            if complementos_en_conflicto:
+                confidence += min(
+                    0.15,
+                    0.05 * len(complementos_en_conflicto)
+                )
+
+            confidence = round(
+                min(confidence, 0.99),
+                2
+            )
+
+            # ============================================================
+            # DESCRIPCIÓN
+            # ============================================================
+
+            descripcion = []
+
+            if sujeto_difiere:
+                descripcion.append(
+                    f"sujeto distinto "
+                    f"('{c1.get('sujeto')}' vs '{c2.get('sujeto')}')"
+                )
+
+            for campo in complementos_en_conflicto:
+
+                descripcion.append(
+                    f"{campo} distinto "
+                    f"('{comp_1.get(campo)}' vs '{comp_2.get(campo)}')"
+                )
+
+            conflicts.append({
+                "concepto_clave":
+                    c1.get("concepto_clave"),
+                "tipo_conflicto":
+                    tipo,
+                "descripcion_conflicto":
+                    "; ".join(descripcion),
+                "confidence":
+                    confidence,
+                "archivo_a":
+                    c1["archivo"],
+                "fragmento_a":
+                    c1["fragmento_original"],
+                "archivo_b":
+                    c2["archivo"],
+                "fragmento_b":
+                    c2["fragmento_original"],
+                "elemento_en_conflicto": {
+                    "sujeto_difiere":
+                        sujeto_difiere,
+                    "complementos_en_conflicto":
+                        complementos_en_conflicto
+                }
+            })
+
+    return conflicts
+
+
+# ====================================================================================
+# FUNCIÓN PRINCIPAL
+# ====================================================================================
+
 def check_conflicts(query: str):
-    """Detecta información conflictiva o contradictoria en la knowledge base."""
-    return "Función de detección de conflictos aún no implementada."
+    """
+    Detector híbrido de contradicciones semánticas.
+    """
+
+    message = query.split(
+        "..INTENTION :"
+    )[0].strip()
+
+    try:
+
+        # ================================================================
+        # 1. RECUPERACIÓN GLOBAL
+        # ================================================================
+
+        data = vector_store.get()
+
+        if not data or not data.get("documents"):
+            return (
+                "La base de datos está vacía."
+            )
+
+        # ================================================================
+        # 2. AGRUPAR CHUNKS POR ARCHIVO
+        # ================================================================
+
+        archivos = defaultdict(list)
+
+        for doc, metadata in zip(
+            data["documents"],
+            data["metadatas"]
+        ):
+
+            source = metadata.get(
+                "source",
+                "desconocido"
+            )
+
+            if doc and doc.strip():
+                archivos[source].append(doc)
+
+        if len(archivos) < 2:
+
+            return (
+                "Se requieren al menos "
+                "2 archivos distintos."
+            )
+
+
+        # ================================================================
+        # 3. EXTRAER CLAIMS CHUNK-BY-CHUNK
+        # ================================================================
+        #
+        # IMPORTANTE:
+        #
+        # NO truncamos archivos completos.
+        # Procesamos chunk por chunk.
+        #
+        # Esto evita perder contexto importante.
+        #
+        # ================================================================
+
+        all_claims = []
+
+        MAX_CHUNKS_PER_FILE = 4
+
+        for source, chunks in archivos.items():
+            selected_chunks = chunks[:MAX_CHUNKS_PER_FILE]
+            for chunk in selected_chunks:
+                claims = extract_claims_from_text(
+                    source=source,
+                    text=chunk
+                )
+                all_claims.extend(claims)
+
+        if len(all_claims) < 2:
+            return (
+                "No se pudieron extraer "
+                "claims suficientes."
+            )
+
+        # ================================================================
+        # 4. AGRUPACIÓN SEMÁNTICA
+        # ================================================================
+
+        grouped_claims = group_claims_semantically(
+            all_claims
+        )
+
+        # ================================================================
+        # 5. DETECCIÓN DETERMINISTA
+        # ================================================================
+
+        all_conflicts = []
+
+        for concept, claims in grouped_claims.items():
+            if len(claims) < 2:
+                continue
+            conflicts = compare_claims_within_group(
+                claims
+            )
+            all_conflicts.extend(conflicts)
+
+        # ================================================================
+        # 6. RESULTADO VACÍO
+        # ================================================================
+
+        if not all_conflicts:
+            return {
+                "tool": "check_conflicts",
+                "status": "success",
+                "query": message,
+                "files_analyzed": list(archivos.keys()),
+                "claims_extracted": len(all_claims),
+                "conflicts_found": 0,
+                "conflicts_by_type": {
+                    "Tipo 1": 0,
+                    "Tipo 2": 0
+                },
+                "conflicts": []
+            }
+
+        # ================================================================
+        # 7. ESTADÍSTICAS DE CONFLICTOS
+        # ================================================================
+
+        tipo1 = [
+            c for c in all_conflicts
+            if c["tipo_conflicto"] == "Tipo 1"
+        ]
+        tipo2 = [
+            c for c in all_conflicts
+            if c["tipo_conflicto"] == "Tipo 2"
+        ]
+
+        # ================================================================
+        # 8. RESPUESTA ESTRUCTURADA PARA EL GRAFO
+        # ================================================================
+        #
+        # IMPORTANTE:
+        #
+        # Esta tool NO genera lenguaje natural final.
+        #
+        # El writer_node será el encargado de:
+        #   - resumir
+        #   - explicar
+        #   - priorizar
+        #   - redactar
+        #
+        # Aquí solo devolvemos datos estructurados.
+        #
+        # ================================================================
+
+        return {
+            "tool": "check_conflicts",
+            "status": "success",
+            "query": message,
+            "files_analyzed": list(archivos.keys()),
+            "claims_extracted": len(all_claims),
+            "conflicts_found": len(all_conflicts),
+            "conflicts_by_type": {
+                "Tipo 1": len(tipo1),
+                "Tipo 2": len(tipo2)
+            },
+            "conflicts": all_conflicts
+        }
+
+    except Exception as e:
+        # ================================================================
+        # ERROR ESTRUCTURADO
+        # ================================================================
+        return {
+            "tool": "check_conflicts",
+            "status": "error",
+            "query": message,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#CHECK CONFLICTS
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
+#===========================================================================================================
 
 def check_obsolescence(query: str):
     """Detecta información obsoleta o que ya no es relevante en la knowledge base."""
