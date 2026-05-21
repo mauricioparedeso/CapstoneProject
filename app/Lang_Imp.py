@@ -95,6 +95,14 @@ WRITER_PROMPT = SystemMessage(content=(
     #=======================CHECK_CONCLFICTS=======================================================
     "CASO SKIPPED — check_conflicts skipped: Si el resultado de una tarea contiene 'status: skipped' y 'reason: files_not_found', NO reportes ningún conflicto.<br>\n"
     "Informa al usuario que los archivos solicitados no están indexados en la base de datos y lista los archivos disponibles. Usa el campo 'writer_hint' como base para redactar.<br>\n"
+    "CASO CONFLICTOS — check_conflicts con resultados: Si el resultado contiene 'status: success' y 'conflicts_found > 0':<br>\n"
+    "1. Extrae cada conflicto del array 'conflicts'<br>\n"
+    "2. Para CADA conflicto, redacta:<br>\n"
+    "   - El concepto en conflicto<br>\n"
+    "   - Qué dice el archivo A: [fragmento_a]<br>\n"
+    "   - Qué dice el archivo B: [fragmento_b]<br>\n"
+    "   - La diferencia específica (de descripcion_conflicto)<br>\n"
+    "   - El nivel de confianza<br>\n"
     #=======================CHECK_CONCLFICTS=======================================================
     "CASO NORMAL — para cualquier otra combinación de tools:<br>\n"
     "- Resumir brevemente qué se analizó.<br>\n"
@@ -393,7 +401,12 @@ def consultar_knowledge_base(query: str):
             hallazgos.append(detectar_errores_ortograficos(message))
 
         if intention == "detect conflicts":
-            hallazgos.append(check_conflicts(message))
+            resultado = check_conflicts(message)
+            # check_conflicts retorna un dict, convertir a string JSON
+            if isinstance(resultado, dict):
+                hallazgos.append(json.dumps(resultado, indent=2, ensure_ascii=False))
+            else:
+                hallazgos.append(str(resultado))
 
         if intention == "detect obsolescence":
             hallazgos.append("check_obsolescence() aún no implementada.")
