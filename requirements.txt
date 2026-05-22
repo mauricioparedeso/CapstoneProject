@@ -11,7 +11,6 @@ aiohttp
 pypdf
 tiktoken
 pyenchant
-
 chromadb
 langchain-chroma
 langchain-huggingface
@@ -23,7 +22,6 @@ langchain-groq
 pytest
 sentence-transformers
 langfuse
-
 langchain-tavily
 langchain-community
 streamlit
