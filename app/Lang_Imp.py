@@ -1,6 +1,6 @@
 with open("API_KEY.txt", "r") as f:
     API_KEYS = [line.strip() for line in f.readlines()]
-    API_KEY = API_KEYS[0]
+    API_KEY = API_KEYS[1]
     LANGFUSE_SECRET_KEY=API_KEYS[10]
     LANGFUSE_PUBLIC_KEY=API_KEYS[11]
     LANGFUSE_BASE_URL=API_KEYS[12]
@@ -41,7 +41,7 @@ from langfuse import observe
 import re
 from datetime import datetime
 
-os.environ["TAVILY_API_KEY"] = "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"
+os.environ["TAVILY_API_KEY"] = API_KEYS[2]
 
 SYSTEM_PROMPT = SystemMessage(
     content=(
