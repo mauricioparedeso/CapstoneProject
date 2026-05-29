@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session
 from app.models.document import Document
 
 # Formatos permitidos (US2)
-ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "pptx"}
 ALLOWED_CONTENT_TYPES = {
     "application/pdf": "pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "text/plain": "txt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 }
 
 # Directorio de almacenamiento — separado de chroma_data

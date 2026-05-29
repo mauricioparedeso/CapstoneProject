@@ -5,10 +5,7 @@ Router de documentos — endpoints de la E1.
   GET    /documents/{id}     → US4
   GET    /documents/         → US5
 """
-import time
-from langchain_community.document_loaders import Docx2txtLoader, UnstructuredPowerPointLoader
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, UploadFile, File, Query
 from pydantic import BaseModel
@@ -16,11 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.models.document import get_db
 from app.services.document_service import upload_document, get_document, list_documents
-
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.Chroma_Imp import vector_store
-import shutil, os
+import os
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -47,76 +41,7 @@ async def upload_document_endpoint(
     db: Session = Depends(get_db),
 ):
     doc = await upload_document(file, db)
-    await file.seek(0)
-
-    temp_path = f"temp_{doc.original_filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    indexing_msg = "No indexado (Formato no soportado para búsqueda)"
-
-    try:
-        if "pdf" in doc.file_format.lower():
-            loader = PyPDFLoader(temp_path)
-            pages = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-            chunks = text_splitter.split_documents(pages)
-            for chunk in chunks:
-                chunk.metadata["doc_id"] = doc.id
-                chunk.metadata["source"] = doc.original_filename
-            t0 = time.time()
-            vector_store.add_documents(chunks)
-            elapsed = round(time.time() - t0, 2)
-            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos ({elapsed}s)"
-            print(f"[indexing] PDF '{doc.original_filename}': {elapsed}s para {len(chunks)} chunks")
-
-        elif "docx" in doc.file_format.lower():
-            loader = Docx2txtLoader(temp_path)
-            pages = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-            chunks = text_splitter.split_documents(pages)
-            for chunk in chunks:
-                chunk.metadata["doc_id"] = doc.id
-                chunk.metadata["source"] = doc.original_filename
-            t0 = time.time()
-            vector_store.add_documents(chunks)
-            elapsed = round(time.time() - t0, 2)
-            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos ({elapsed}s)"
-            print(f"[indexing] DOCX '{doc.original_filename}': {elapsed}s para {len(chunks)} chunks")
-
-        elif "txt" in doc.file_format.lower():
-            loader = TextLoader(temp_path)
-            pages = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-            chunks = text_splitter.split_documents(pages)
-            for chunk in chunks:
-                chunk.metadata["doc_id"] = doc.id
-                chunk.metadata["source"] = doc.original_filename
-            t0 = time.time()
-            vector_store.add_documents(chunks)
-            elapsed = round(time.time() - t0, 2)
-            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos ({elapsed}s)"
-            print(f"[indexing] TXT '{doc.original_filename}': {elapsed}s para {len(chunks)} chunks")
-
-        elif "pptx" in doc.file_format.lower():
-            loader = UnstructuredPowerPointLoader(temp_path)
-            pages = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-            chunks = text_splitter.split_documents(pages)
-            for chunk in chunks:
-                chunk.metadata["doc_id"] = doc.id
-                chunk.metadata["source"] = doc.original_filename
-            t0 = time.time()
-            vector_store.add_documents(chunks)
-            elapsed = round(time.time() - t0, 2)
-            indexing_msg = f"Indexado exitosamente en {len(chunks)} fragmentos ({elapsed}s)"
-            print(f"[indexing] PPTX '{doc.original_filename}': {elapsed}s para {len(chunks)} chunks")
-
-    except Exception as e:
-        indexing_msg = f"Error en indexación: {str(e)}"
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+    indexing_msg = "Indexado exitosamente en ChromaDB"
 
     return UploadResponse(
         message="Documento subido exitosamente.",

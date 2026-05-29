@@ -12,7 +12,7 @@ después de guardar el archivo y el registro en BD.
 from pathlib import Path
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader, UnstructuredPowerPointLoader
 
 from app.Chroma_Imp import vector_store
 
@@ -35,6 +35,8 @@ def _load_document(storage_path: str, file_format: str, original_filename: str):
         loader = Docx2txtLoader(path)
     elif file_format == "txt":
         loader = TextLoader(path, encoding="utf-8")
+    elif file_format == "pptx":
+        loader = UnstructuredPowerPointLoader(path)
     else:
         raise ValueError(f"Formato no soportado para indexación: {file_format}")
 
