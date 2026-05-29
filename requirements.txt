@@ -27,3 +27,6 @@ langchain-community
 streamlit
 docx2txt
 transformers==4.40.0
+python-pptx
+unstructured
+bcrypt

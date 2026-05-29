@@ -1,23 +1,26 @@
 """
 E4 — Instructor Dashboard
 Knowledge Base Curator — SoftServe
-
-Correr con:
-    streamlit run dashboard.py
-
-Requiere que la API esté corriendo en:
-    https://literate-capybara-g456xxg95x652979q-8000.app.github.dev
 """
 import time
 import streamlit as st
 import requests
 import json
 from datetime import datetime
+import bcrypt
+
+# ── Credenciales de acceso ────────────────────────────────────────────────────
+
+USUARIO_VALIDO = "instructor"
+PASSWORD_HASH = bcrypt.hashpw(b"softserve2026", bcrypt.gensalt())
+
+def verificar_login(usuario: str, password: str) -> bool:
+    return usuario == USUARIO_VALIDO and bcrypt.checkpw(password.encode(), PASSWORD_HASH)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 
-#API_BASE = "http://fastapi_app:8000"
-API_BASE = "http://127.0.0.1:8000"
+API_BASE = "http://fastapi_app:8000"
+#API_BASE = "http://127.0.0.1:8000"
 
 st.set_page_config(
     page_title="Knowledge Base Curator",
@@ -26,11 +29,36 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Control de sesión ─────────────────────────────────────────────────────────
+
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+
+if not st.session_state.autenticado:
+    st.markdown("""
+    <div style="max-width:400px; margin:5rem auto; padding:2rem; background:white; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.1); border-top:4px solid #0099D8;">
+        <h2 style="color:#1A3A6B; margin-bottom:0.5rem;">Knowledge Base Curator</h2>
+        <p style="color:#6C6C6C; margin-bottom:1.5rem;">Acceso restringido · SoftServe</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        usuario = st.text_input("Usuario")
+        password = st.text_input("Contraseña", type="password")
+        submitted = st.form_submit_button("Ingresar")
+        if submitted:
+            if verificar_login(usuario, password):
+                st.session_state.autenticado = True
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+
+    st.stop()
+
 # ── Colores SoftServe ─────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
-    /* Paleta SoftServe */
     :root {
         --ss-blue: #0099D8;
         --ss-blue-light: #5BC4F0;
@@ -39,8 +67,6 @@ st.markdown("""
         --ss-light: #DCE3E7;
         --ss-white: #FFFFFF;
     }
-
-    /* Header principal */
     .ss-header {
         background: linear-gradient(135deg, #0D1B2A 0%, #0A2A4A 60%, #003A5C 100%);
         color: white;
@@ -53,19 +79,8 @@ st.markdown("""
         border-left: 4px solid #0099D8;
         box-shadow: 0 4px 20px rgba(0, 153, 216, 0.2);
     }
-    .ss-header h1 {
-        margin: 0;
-        font-size: 1.6rem;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-    }
-    .ss-header p {
-        margin: 0;
-        font-size: 0.9rem;
-        opacity: 0.9;
-    }
-
-    /* Tarjetas de documentos */
+    .ss-header h1 { margin: 0; font-size: 1.6rem; font-weight: 700; letter-spacing: -0.5px; }
+    .ss-header p { margin: 0; font-size: 0.9rem; opacity: 0.9; }
     .doc-card {
         background: white;
         border: 1px solid var(--ss-light);
@@ -75,31 +90,14 @@ st.markdown("""
         margin-bottom: 0.8rem;
         transition: box-shadow 0.2s;
     }
-    .doc-card:hover {
-        box-shadow: 0 2px 8px rgba(0,153,216,0.15);
-    }
-    .doc-title {
-        font-weight: 600;
-        color: var(--ss-dark);
-        font-size: 0.95rem;
-        margin-bottom: 0.3rem;
-    }
-    .doc-meta {
-        color: var(--ss-gray);
-        font-size: 0.8rem;
-    }
-    .badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 500;
-    }
+    .doc-card:hover { box-shadow: 0 2px 8px rgba(0,153,216,0.15); }
+    .doc-title { font-weight: 600; color: var(--ss-dark); font-size: 0.95rem; margin-bottom: 0.3rem; }
+    .doc-meta { color: var(--ss-gray); font-size: 0.8rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 500; }
     .badge-pdf { background: #FFE8E2; color: #C13A1A; }
     .badge-docx { background: #E2EEFF; color: #1A4FC1; }
     .badge-txt { background: #E8F5E9; color: #1B7B2E; }
-
-    /* Chat */
+    .badge-pptx { background: #FFF3E0; color: #E65100; }
     .chat-user {
         color: #1a1a1a !important;
         background: #FFF3F0;
@@ -120,25 +118,9 @@ st.markdown("""
     }
     .chat-user * { color: #1a1a1a !important; }
     .chat-agent * { color: #1a1a1a !important; }
-    .chat-label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-bottom: 0.3rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
+    .chat-label { font-size: 0.75rem; font-weight: 600; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
     .chat-label.user { color: var(--ss-blue); }
     .chat-label.agent { color: var(--ss-gray); }
-
-    /* Sugerencias placeholder */
-    .suggestion-card {
-        background: white;
-        border: 1px solid var(--ss-light);
-        border-radius: 6px;
-        padding: 1rem 1.2rem;
-        margin-bottom: 0.8rem;
-        opacity: 0.7;
-    }
     .coming-soon {
         background: #FFF8F7;
         border: 2px dashed var(--ss-blue-light);
@@ -147,81 +129,34 @@ st.markdown("""
         text-align: center;
         color: var(--ss-gray);
     }
-
-    /* Sidebar — azul marino oscuro */
-    [data-testid="stSidebar"] {
-        background-color: #0A1628 !important;
-        border-right: 1px solid #0099D8 !important;
-    }
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] h4,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] div,
-    [data-testid="stSidebar"] strong {
+    [data-testid="stSidebar"] { background-color: #0A1628 !important; border-right: 1px solid #0099D8 !important; }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h4, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] div, [data-testid="stSidebar"] strong {
         color: white !important;
     }
-
-    /* Botones */
-    .stButton > button {
-        background-color: var(--ss-blue);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        font-weight: 500;
-    }
-    .stButton > button:hover {
-        background-color: #007DAF;
-        color: white;
-    }
-
-    /* Métricas */
-    [data-testid="metric-container"] {
-        background: white;
-        border: 1px solid var(--ss-light);
-        border-radius: 8px;
-        padding: 0.5rem;
-    }
-
-    /* Radio button — quitar naranja, poner cian */
-    [data-testid="stRadio"] label div[data-testid="stMarkdownContainer"] p {
-        color: white !important;
-    }
-    .st-emotion-cache-j7qwjs, .st-bo, .st-bp {
-        border-color: #0099D8 !important;
-    }
-    [data-testid="stRadio"] input[type="radio"]:checked + div {
-        border-color: #0099D8 !important;
-        background-color: #0099D8 !important;
-    }
-
-    /* File uploader — drag and drop */
-    [data-testid="stFileUploader"] {
-        border: 2px dashed #0099D8 !important;
-        border-radius: 8px !important;
-        background: rgba(0, 153, 216, 0.05) !important;
-    }
-    [data-testid="stFileUploader"]:hover {
-        border-color: #007DAF !important;
-        background: rgba(0, 153, 216, 0.1) !important;
-    }
-    [data-testid="stFileUploaderDropzone"] {
-        border: 2px dashed #0099D8 !important;
-        border-radius: 8px !important;
-        background: rgba(0, 153, 216, 0.05) !important;
-    }
-    [data-testid="stFileUploaderDropzone"]:hover {
-        border-color: #007DAF !important;
-        background: rgba(0, 153, 216, 0.1) !important;
-    }
+    .stButton > button { background-color: var(--ss-blue); color: white; border: none; border-radius: 4px; font-weight: 500; }
+    .stButton > button:hover { background-color: #007DAF; color: white; }
+    [data-testid="metric-container"] { background: white; border: 1px solid var(--ss-light); border-radius: 8px; padding: 0.5rem; }
+    [data-testid="stRadio"] label div[data-testid="stMarkdownContainer"] p { color: white !important; }
+    .st-emotion-cache-j7qwjs, .st-bo, .st-bp { border-color: #0099D8 !important; }
+    [data-testid="stRadio"] input[type="radio"]:checked + div { border-color: #0099D8 !important; background-color: #0099D8 !important; }
+    [data-testid="stFileUploader"] { border: 2px dashed #0099D8 !important; border-radius: 8px !important; background: rgba(0, 153, 216, 0.05) !important; }
+    [data-testid="stFileUploader"]:hover { border-color: #007DAF !important; background: rgba(0, 153, 216, 0.1) !important; }
+    [data-testid="stFileUploaderDropzone"] { border: 2px dashed #0099D8 !important; border-radius: 8px !important; background: rgba(0, 153, 216, 0.05) !important; }
+    [data-testid="stFileUploaderDropzone"]:hover { border-color: #007DAF !important; background: rgba(0, 153, 216, 0.1) !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── Helpers API ───────────────────────────────────────────────────────────────
+
+def check_api():
+    try:
+        r = requests.get(f"{API_BASE}/health", timeout=5)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 def get_documents():
     try:
@@ -231,7 +166,6 @@ def get_documents():
     except Exception:
         pass
     return None
-
 
 def upload_document(file):
     try:
@@ -244,26 +178,16 @@ def upload_document(file):
     except Exception as e:
         return {"error": str(e)}, 500
 
-
 def chat_with_agent(message):
     try:
-        r = requests.post(
-            f"{API_BASE}/agente/chat",
-            json={"message": message},
-            timeout=60,
-        )
+        r = requests.post(f"{API_BASE}/agente/chat", json={"message": message}, timeout=60)
         if r.status_code == 200:
             return r.json().get("respuesta", "Sin respuesta del agente.")
     except Exception as e:
         return f"Error al conectar con el agente: {e}"
     return "Error inesperado."
 
-
 def chat_with_agent_stream(message, placeholder_progreso):
-    """
-    Llama al endpoint de streaming y actualiza un placeholder con el progreso.
-    Retorna la respuesta final del agente.
-    """
     NODOS_ICONO = {
         "memory_node":        "Consultando memoria",
         "prompt_node":        "Analizando la pregunta",
@@ -329,23 +253,18 @@ def chat_with_agent_stream(message, placeholder_progreso):
 
     return respuesta_final
 
-
 def search_chromadb(query: str, n_results: int = 3):
-    """Search ChromaDB directly and return relevant chunks."""
     try:
-        from app.Chroma_Imp import vector_store
-        results = vector_store.similarity_search(query, k=n_results)
-        return results
+        r = requests.post(
+            f"{API_BASE}/documents/search",
+            json={"query": query, "n_results": n_results},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            return r.json().get("results", [])
     except Exception as e:
         return f"Error: {e}"
-
-
-def check_api():
-    try:
-        r = requests.get(f"{API_BASE}/health", timeout=5)
-        return r.status_code == 200
-    except Exception:
-        return False
+    return []
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -363,12 +282,11 @@ with col_title:
     </div>
     """, unsafe_allow_html=True)
 
-# Estado de la API
 api_ok = check_api()
 if api_ok:
     st.success("API conectada y funcionando")
 else:
-    st.error("No se puede conectar con la API. Verifica que este corriendo.")
+    st.error("No se puede conectar con la API. Verifica que esté corriendo.")
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -380,66 +298,69 @@ with st.sidebar:
         ["Documentos", "Consultar Agente", "Sugerencias", "Memory Log"],
         label_visibility="collapsed",
     )
+    st.markdown("---")
+    if st.button("Cerrar sesión"):
+        st.session_state.autenticado = False
+        st.rerun()
 
 # ── Página: Documentos ────────────────────────────────────────────────────────
 
 if pagina == "Documentos":
     st.subheader("Knowledge Base — Documentos")
 
-    # Upload
     with st.expander("Subir nuevo documento", expanded=False):
         if "upload_key" not in st.session_state:
             st.session_state.upload_key = 0
 
         archivo = st.file_uploader(
             "Selecciona un archivo",
-            type=["pdf", "docx", "txt"],
-            help="Formatos soportados: PDF, DOCX, TXT",
+            type=["pdf", "docx", "txt", "pptx"],
+            help="Formatos soportados: PDF, DOCX, TXT, PPTX",
             key=f"uploader_{st.session_state.upload_key}",
         )
         if archivo and st.button("Subir documento"):
-            with st.spinner("Subiendo..."):
+            with st.spinner("Subiendo e indexando..."):
                 resultado, status = upload_document(archivo)
             if status == 201:
-                st.success(f"Documento subido. ID: `{resultado['document']['id']}`")
+                indexing_status = resultado.get("indexing_status", "")
+                st.success(f"✅ Documento subido — {indexing_status}")
                 st.session_state.upload_key += 1
-                time.sleep(3)
+                time.sleep(1)
                 st.rerun()
             else:
                 st.error(f"Error: {resultado.get('detail', resultado)}")
 
     st.markdown("---")
-
-    # Búsqueda directa en ChromaDB
-    st.markdown("---")
     st.markdown("**Buscar en contenido de documentos (ChromaDB)**")
-    col_search, col_btn = st.columns([4, 1])
-    query_chroma = col_search.text_input(
-        "Búsqueda",
-        placeholder="Ej: errores ortograficos, fechas incorrectas...",
-        label_visibility="collapsed",
-        key="chroma_search"
-    )
-    if col_btn.button("Buscar"):
-        if query_chroma.strip():
-            with st.spinner("Buscando en ChromaDB..."):
-                resultados = search_chromadb(query_chroma)
-            if isinstance(resultados, str):
-                st.error(resultados)
-            elif not resultados:
-                st.info("No se encontraron resultados.")
-            else:
-                for i, doc in enumerate(resultados):
-                    source = doc.metadata.get("source", "Desconocido")
-                    st.markdown(f"""
-                    <div class="doc-card">
-                        <div class="doc-title">Fragmento {i+1} — {source}</div>
-                        <div class="doc-meta" style="color:#333; margin-top:0.4rem;">{doc.page_content[:400]}...</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+
+    with st.form("search_form"):
+        query_chroma = st.text_input(
+            "Búsqueda",
+            placeholder="Ej: errores ortograficos, fechas incorrectas...",
+            label_visibility="collapsed",
+        )
+        buscar_submitted = st.form_submit_button("Buscar")
+
+    if buscar_submitted and query_chroma.strip():
+        with st.spinner("Buscando en ChromaDB..."):
+            resultados = search_chromadb(query_chroma)
+        if isinstance(resultados, str):
+            st.error(resultados)
+        elif not resultados:
+            st.info("No se encontraron resultados.")
+        else:
+            for i, doc in enumerate(resultados):
+                source = doc.get("source", "Desconocido") if isinstance(doc, dict) else doc.metadata.get("source", "Desconocido")
+                content = doc.get("content", "") if isinstance(doc, dict) else doc.page_content
+                st.markdown(f"""
+                <div class="doc-card">
+                    <div class="doc-title">Fragmento {i+1} — {source}</div>
+                    <div class="doc-meta" style="color:#333; margin-top:0.4rem;">{content[:400]}...</div>
+                </div>
+                """, unsafe_allow_html=True)
+
     st.markdown("---")
 
-    # Lista de documentos
     docs = get_documents()
 
     if docs is None:
@@ -447,19 +368,17 @@ if pagina == "Documentos":
     elif len(docs) == 0:
         st.info("No hay documentos en la Knowledge Base. Sube el primero.")
     else:
-        # Métricas
         col1, col2, col3 = st.columns(3)
         formatos = [d["file_format"] for d in docs]
         col1.metric("Total documentos", len(docs))
         col2.metric("PDFs", formatos.count("pdf"))
-        col3.metric("Otros formatos", formatos.count("docx") + formatos.count("txt"))
+        col3.metric("Otros formatos", formatos.count("docx") + formatos.count("txt") + formatos.count("pptx"))
 
         st.markdown("---")
 
-        # Filtros
         col_f1, col_f2 = st.columns([2, 1])
         buscar = col_f1.text_input("Buscar documento", placeholder="Nombre del archivo...")
-        formato_filtro = col_f2.selectbox("Formato", ["Todos", "pdf", "docx", "txt"])
+        formato_filtro = col_f2.selectbox("Formato", ["Todos", "pdf", "docx", "txt", "pptx"])
 
         docs_filtrados = docs
         if buscar:
@@ -507,11 +426,9 @@ elif pagina == "Consultar Agente":
     st.subheader("Consultar Agente IA")
     st.caption("El agente puede responder preguntas sobre los documentos de la Knowledge Base.")
 
-    # Historial de chat en session_state
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # Mostrar historial
     for msg in st.session_state.chat_history:
         if msg["role"] == "user":
             st.markdown(f"""
@@ -521,50 +438,57 @@ elif pagina == "Consultar Agente":
             </div>
             """, unsafe_allow_html=True)
         else:
+            content = msg["content"]
+            if "=== ANALISIS COMPLETO ===" in content:
+                parts = content.split("=== ANALISIS COMPLETO ===")
+                resumen = parts[0].strip()
+                detalle = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                resumen = content
+                detalle = ""
+
             st.markdown(f"""
             <div class="chat-agent">
                 <div class="chat-label agent">Agente IA</div>
-                {msg["content"]}
+                {resumen}
             </div>
             """, unsafe_allow_html=True)
 
-    # Preguntas sugeridas
+            if detalle:
+                with st.expander("Ver análisis detallado"):
+                    st.markdown(detalle.replace("<br>", "\n").replace("<br>\n", "\n"), unsafe_allow_html=False)
+
     if len(st.session_state.chat_history) == 0:
         st.markdown("**Preguntas sugeridas:**")
         col1, col2 = st.columns(2)
         if col1.button("¿Qué archivos hay en la Knowledge Base?"):
-            st.session_state.chat_input = "¿Qué archivos hay en la Knowledge Base?"
+            st.session_state.pregunta_sugerida = "¿Qué archivos hay en la Knowledge Base?"
+            st.rerun()
         if col2.button("Resume el contenido de los documentos"):
-            st.session_state.chat_input = "Resume el contenido de los documentos disponibles"
+            st.session_state.pregunta_sugerida = "Resume el contenido de los documentos disponibles"
+            st.rerun()
 
-    # Input
-    pregunta = st.text_input(
-        "Escribe tu pregunta",
-        value=st.session_state.get("chat_input", ""),
-        placeholder="Ej: ¿Qué temas cubre el documento X?",
-        key="chat_input_field",
-    )
+    with st.form("chat_form", clear_on_submit=True):
+        pregunta = st.text_input(
+            "Escribe tu pregunta",
+            value=st.session_state.pop("pregunta_sugerida", ""),
+            placeholder="Ej: ¿Qué temas cubre el documento X?",
+        )
+        col_send, col_clear = st.columns([1, 5])
+        enviar = col_send.form_submit_button("Enviar")
+        limpiar = col_clear.form_submit_button("Limpiar chat")
 
-    col_send, col_clear = st.columns([1, 5])
-    enviar = col_send.button("Enviar")
-
-    if col_clear.button("Limpiar chat"):
+    if limpiar:
         st.session_state.chat_history = []
         with open("app/memory_log.json", "w") as f:
             json.dump([], f)
         st.rerun()
-        
 
     if enviar and pregunta.strip():
         st.session_state.chat_history.append({"role": "user", "content": pregunta})
-        if "chat_input" in st.session_state:
-            del st.session_state["chat_input"]
-        # Crear placeholder para el progreso
         placeholder = st.empty()
         respuesta = chat_with_agent_stream(pregunta, placeholder)
-        # Limpiar el placeholder de progreso
         placeholder.empty()
-        # Guardar respuesta
         if respuesta and respuesta.strip():
             st.session_state.chat_history.append({"role": "agent", "content": respuesta})
         else:
@@ -589,7 +513,6 @@ elif pagina == "Sugerencias":
 
     st.markdown("---")
     st.markdown("**Estructura esperada de sugerencias (E3 → E4):**")
-
     ejemplo = {
         "id": "sugg-001",
         "document": "syllabus_2026.pdf",
@@ -601,6 +524,7 @@ elif pagina == "Sugerencias":
     }
     st.json(ejemplo)
     st.caption("Este JSON es el contrato de datos que E3 deberá entregar cuando esté implementado.")
+
 
 # ── Página: Memory Log ───────────────────────────────────────────────────────
 

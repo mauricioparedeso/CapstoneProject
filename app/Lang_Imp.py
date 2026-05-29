@@ -67,8 +67,8 @@ PLANNER_PROMPT = SystemMessage(content=(
     "Eres un planificador. Analiza el mensaje del usuario y descomponlo en tareas.<br>\n"
     "Cada tarea es una petición atómica del usuario.<br>\n"
     "Para cada tarea, decide qué herramienta usar, y que mensaje enviar como prompt.<br>\n<br>\n"
-    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect conflicts', 'detect obsolescence', 'detect outdated content', 'web_search'].<br>\n"
-    "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' para detectar datos erróneos como fechas imposibles o errores ortográficos evidentes. Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías. Usa 'web_search' ÚNICAMENTE para preguntas sobre eventos recientes, noticias actuales, o información externa que NO pueda estar en los documentos de la knowledge base. NO uses 'web_search' para preguntas sobre documentos subidos, análisis de contenido, errores ortográficos o fechas en archivos.<br>\n"
+    "La intention de cada tarea es entender qué información específica el usuario quiere obtener. Las opciones posibles son: ['weather', 'file listing', 'general analysis', 'detect redundancy', 'detect incorrect info', 'detect invalid dates', 'detect conflicts', 'detect obsolescence', 'detect outdated content', 'web_search'].<br>\n"
+    "Usa 'detect outdated content' ÚNICAMENTE para detectar fechas numéricas pasadas en documentos (por ejemplo, fechas de 2024 estando en 2026). Usa 'detect obsolescence' ÚNICAMENTE para detectar frameworks o librerías tecnológicamente desactualizadas. Usa 'detect incorrect info' ÚNICAMENTE para detectar errores ortográficos evidentes en documentos. Usa 'detect invalid dates' ÚNICAMENTE para detectar fechas imposibles o inválidas (por ejemplo, 30/02/2024). Usa 'general analysis' para tareas de análisis que no encajan en las otras categorías. Usa 'web_search' ÚNICAMENTE para preguntas sobre eventos recientes, noticias actuales, o información externa que NO pueda estar en los documentos de la knowledge base. NO uses 'web_search' para preguntas sobre documentos subidos, análisis de contenido, errores ortográficos o fechas en archivos.<br>\n"
     "CASO ESPECIAL — Resumen ejecutivo: Si el usuario pregunta algo que requiere comparar el contenido de los documentos con información externa actual (por ejemplo: '¿mis documentos están desactualizados?', '¿qué tan relevante es mi contenido?'), genera DOS tasks: la primera con 'consultar_knowledge_base' y la segunda con 'buscar_en_web'. El writer consolidará ambos resultados en un resumen ejecutivo.<br>\n"
     "Si hay 2 tareas con la misma intención, combínalas en una sola tarea con un mensaje que incluya ambas peticiones, para optimizar el uso de herramientas.<br>\n"
     "Responde ÚNICAMENTE con un JSON array, sin texto adicional, con esta estructura:<br>\n"
@@ -186,27 +186,25 @@ QUERY_PROMPT = SystemMessage(content=(
 
 SPELLING_PROMPT = SystemMessage(content=(
     "Filtra errores ortográficos reales en textos.<br>\n<br>\n"
-
     "REGLAS:<br>\n"
-    "- Solo incluye palabras incorrectas o parcialmente incorrectas en español o inglés<br>\n"
-    "- Elimina:<br>\n"
-    "  * nombres propios<br>\n"
-    "  * siglas<br>\n"
-    "  * URLs<br>\n"
-    "  * código o identificadores técnicos<br>\n"
-    "  * tecnicismos<br>\n"
+    "- Solo incluye palabras claramente mal escritas en español<br>\n"
+    "- Elimina SIEMPRE:<br>\n"
+    "  * nombres propios (personas, lugares, empresas)<br>\n"
+    "  * siglas y acrónimos (URL, PDF, AWS, CV)<br>\n"
+    "  * URLs y dominios (https, www, linkedin, gmail)<br>\n"
+    "  * términos de programación (from, import, build, distutils, core, sources, version, extension, setup, pip, python, selenium, chromadb, langchain)<br>\n"
+    "  * tecnicismos en inglés (essentials, stride, webscrapping, gestion)<br>\n"
+    "  * identificadores técnicos (cualquier palabra en inglés usada como nombre de variable o librería)<br>\n"
+    "EJEMPLOS de errores VÁLIDOS: sali→salí, lus→luz, palida→pálida, esactamente→exactamente, inprobisados→improvisados<br>\n"
+    "EJEMPLOS de lo que NO debes incluir: distutils, from, https, selenium, linkedin, build, chromadb<br>\n"
     "- NO expliques nada<br>\n"
     "- NO agregues texto adicional<br>\n"
     "- NO repitas sources<br>\n<br>\n"
-
     "FORMATO OBLIGATORIO:<br>\n"
     "Devuelve JSON válido:<br>\n"
     "[{\"source\": \"str\", \"errors\": [\"str\"]}]<br>\n<br>\n"
-    "Añadir al final, un Json con el número total de errores detectados antes de limpieza, para referencia:<br>\n"
-    "{\"total_errors\": \"int\"}<br>\n<br>\n"
-
     "REGLAS DE SALIDA:<br>\n"
-    "- Enviarás una lista de las 15 palabras más relevantes, junto con su fuente"
+    "- Máximo 10 errores reales por source, los más relevantes"
 ))
 
 
@@ -396,8 +394,10 @@ def consultar_knowledge_base(query: str):
             hallazgos.append(check_redundancy(message))
 
         if intention == "detect incorrect info":
-            hallazgos.append(detectar_fechas_invalidas(message))
             hallazgos.append(detectar_errores_ortograficos(message))
+
+        if intention == "detect invalid dates":
+            hallazgos.append(detectar_fechas_invalidas(message))
 
         if intention == "detect conflicts":
             resultado = check_conflicts(message)
